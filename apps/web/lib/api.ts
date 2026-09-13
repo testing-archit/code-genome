@@ -1,5 +1,6 @@
 import type {
   AnalysisRun,
+  Architecture,
   Evidence,
   GraphProjection,
   ProblemDetail,
@@ -74,4 +75,8 @@ export function getRepositoryInventory(repositoryId: string): Promise<Repository
   return request<RepositoryInventory>(
     `/repositories/${repositoryId}/inventory?commit_limit=100&file_limit=2000`,
   );
+}
+
+export function getArchitecture(repositoryId: string): Promise<Architecture> {
+  return request<Architecture>(`/repositories/${repositoryId}/architecture?relationship_limit=100`);
 }

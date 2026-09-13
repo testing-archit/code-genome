@@ -112,3 +112,33 @@ export type RepositoryInventory = {
   }>;
   limitations: string[];
 };
+
+export type Architecture = {
+  repository_id: string;
+  snapshot_sha: string;
+  analysis_version: string;
+  modules: Array<{
+    id: string;
+    name: string;
+    file_paths: string[];
+    confidence: number;
+    description: string;
+    citations: string[];
+    inferred: boolean;
+  }>;
+  hotspots: Array<{
+    path: string;
+    commit_count: number;
+    churn: number;
+    score: number;
+    citations: string[];
+  }>;
+  co_changes: Array<{
+    left_path: string;
+    right_path: string;
+    commit_count: number;
+    confidence: number;
+    citations: string[];
+  }>;
+  limitations: string[];
+};

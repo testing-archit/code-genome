@@ -3,6 +3,7 @@
 import type {
   AnalysisRun,
   AnalysisState,
+  Architecture,
   Evidence,
   GraphProjection,
   Repository,
@@ -14,6 +15,7 @@ import {
   createAnalysis,
   createRepository,
   getAnalysis,
+  getArchitecture,
   getEvidence,
   getGraph,
   getRepositoryInventory,
@@ -42,6 +44,7 @@ export function GenomeDashboard() {
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [graph, setGraph] = useState<GraphProjection | null>(null);
   const [inventory, setInventory] = useState<RepositoryInventory | null>(null);
+  const [architecture, setArchitecture] = useState<Architecture | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -54,6 +57,7 @@ export function GenomeDashboard() {
   const latestRun = runs[0] ?? null;
   const activeGraph = graph?.scope.repository_id === selectedId ? graph : null;
   const activeInventory = inventory?.repository_id === selectedId ? inventory : null;
+  const activeArchitecture = architecture?.repository_id === selectedId ? architecture : null;
 
   useEffect(() => {
     let active = true;
@@ -125,6 +129,21 @@ export function GenomeDashboard() {
     };
   }, [latestRun?.snapshot_sha, latestRun?.state, selectedId]);
 
+  useEffect(() => {
+    if (!selectedId || latestRun?.state !== "SUCCEEDED" || !latestRun.snapshot_sha) return;
+    let active = true;
+    void getArchitecture(selectedId)
+      .then((result) => {
+        if (active && result.snapshot_sha === latestRun.snapshot_sha) setArchitecture(result);
+      })
+      .catch(() => {
+        if (active) setArchitecture(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [latestRun?.snapshot_sha, latestRun?.state, selectedId]);
+
   async function startAnalysis() {
     if (!selected) return;
     setIsStarting(true);
@@ -145,6 +164,7 @@ export function GenomeDashboard() {
     setRuns([]);
     setGraph(null);
     setInventory(null);
+    setArchitecture(null);
     setSelectedId(repository.id);
     setIsAdding(false);
   }
@@ -154,6 +174,7 @@ export function GenomeDashboard() {
     setRuns([]);
     setGraph(null);
     setInventory(null);
+    setArchitecture(null);
     setSelectedId(repositoryId);
   }
 
@@ -168,6 +189,7 @@ export function GenomeDashboard() {
         <nav aria-label="Primary navigation" className="primary-nav">
           <a className="nav-item active" href="#repositories"><span>Repository map</span><span className="nav-index">1</span></a>
           <a className="nav-item" href="#runs"><span>Analysis runs</span><span className="nav-index">2</span></a>
+          <a className="nav-item" href="#architecture"><span>Architecture strata</span><span className="nav-index">3</span></a>
           <span className="nav-item disabled"><span>Delivery auditor</span><span className="soon">Phase 3</span></span>
         </nav>
 
@@ -278,6 +300,8 @@ export function GenomeDashboard() {
           </div>
         </section>
 
+        {activeArchitecture && <ArchitectureMap architecture={activeArchitecture} />}
+
         <section className="runs-section" id="runs">
           <div className="section-heading"><h2>Analysis ledger</h2><span>Immutable run history</span></div>
           <div className="ledger-head"><span>State</span><span>Run</span><span>Scope</span><span>Started</span><span>Result</span></div>
@@ -297,6 +321,51 @@ export function GenomeDashboard() {
 
       {isAdding && <RepositoryDialog onClose={() => setIsAdding(false)} onSave={addRepository} />}
     </main>
+  );
+}
+
+function ArchitectureMap({ architecture }: { architecture: Architecture }) {
+  return (
+    <section className="architecture-section" id="architecture">
+      <div className="section-heading">
+        <h2>Architecture strata</h2>
+        <span>{architecture.analysis_version} · inferred from repository evidence</span>
+      </div>
+      <div className="architecture-layout">
+        <div className="module-strata">
+          {architecture.modules.map((module) => (
+            <article key={module.id}>
+              <div className="module-band" style={{ "--module-confidence": `${module.confidence * 100}%` } as React.CSSProperties}>
+                <strong>{module.name}</strong><span>{module.file_paths.length} files</span>
+              </div>
+              <p>{module.description}</p>
+              <div className="citation-row">
+                <span>Inferred · {Math.round(module.confidence * 100)}% confidence</span>
+                {module.citations.slice(0, 3).map((citation) => <code key={citation}>{citation.slice(0, 19)}</code>)}
+              </div>
+            </article>
+          ))}
+        </div>
+        <aside className="evolution-seams">
+          <div className="strata-subhead"><h3>Evolutionary seams</h3><span>Observed co-change</span></div>
+          {architecture.co_changes.slice(0, 8).map((edge) => (
+            <div className="seam-row" key={`${edge.left_path}:${edge.right_path}`}>
+              <div><span>{nodeTitle(edge.left_path)}</span><span>{nodeTitle(edge.right_path)}</span></div>
+              <i style={{ width: `${Math.max(12, edge.confidence * 100)}%` }} />
+              <small>{edge.commit_count} shared commits · {Math.round(edge.confidence * 100)}%</small>
+            </div>
+          ))}
+          <div className="strata-subhead hotspot-head"><h3>Relative hotspots</h3><span>Frequency + churn</span></div>
+          {architecture.hotspots.slice(0, 6).map((hotspot) => (
+            <div className="hotspot-row" key={hotspot.path}>
+              <span title={hotspot.path}>{hotspot.path}</span>
+              <strong>{Math.round(hotspot.score * 100)}</strong>
+            </div>
+          ))}
+          <p className="architecture-limit">{architecture.limitations[1]}</p>
+        </aside>
+      </div>
+    </section>
   );
 }
 

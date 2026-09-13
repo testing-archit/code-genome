@@ -151,9 +151,7 @@ def test_publishes_and_serves_an_immutable_structural_graph(
         "src/format.ts",
         "src/index.ts",
     ]
-    architecture = client.get(
-        "/api/v1/repositories/repo_structural/architecture", headers=headers
-    )
+    architecture = client.get("/api/v1/repositories/repo_structural/architecture", headers=headers)
     assert architecture.status_code == 200
     module = architecture.json()["modules"][0]
     assert module["name"] == "src"
