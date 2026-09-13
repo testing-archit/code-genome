@@ -1,3 +1,5 @@
+import logging
+
 from code_genome_intelligence import (
     ImpactRelation,
     RetrievalDocument,
@@ -12,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..audit import record_audit_event
 from ..auth import Actor, Database
+from ..config import get_settings
 from ..errors import AppError
 from ..ids import new_id
 from ..models import (
@@ -37,8 +40,10 @@ from ..schemas import (
     RiskResponse,
     RiskScoreResponse,
 )
+from ..services.gemini import GeminiProviderError, generate_grounded_answer
 
 router = APIRouter(tags=["intelligence"])
+logger = logging.getLogger(__name__)
 
 
 def _repository(db: Database, repository_id: str, actor: Actor) -> Repository:
@@ -246,9 +251,29 @@ def create_grounded_answer(
 ) -> GroundedAnswerResponse:
     _repository(db, payload.repository_id, actor)
     snapshot = _snapshot(db, payload.repository_id, actor)
-    result = answer_question(
-        payload.question, _retrieval_documents(db, payload.repository_id, snapshot)
-    )
+    documents = _retrieval_documents(db, payload.repository_id, snapshot)
+    result = answer_question(payload.question, documents)
+    retrieval_version = "lexical-grounding@0.1.0"
+    settings = get_settings()
+    api_key = settings.gemini_api_key
+    if result.evidence_ids and api_key is not None and api_key.get_secret_value():
+        selected_ids = set(result.evidence_ids)
+        selected = tuple(document for document in documents if document.id in selected_ids)
+        try:
+            result = generate_grounded_answer(
+                api_key=api_key.get_secret_value(),
+                model=settings.gemini_model,
+                question=payload.question,
+                documents=selected,
+                timeout_seconds=settings.gemini_timeout_seconds,
+                max_output_tokens=settings.gemini_max_output_tokens,
+            )
+            retrieval_version = f"lexical+gemini:{settings.gemini_model}"
+        except GeminiProviderError:
+            logger.warning(
+                "gemini_grounded_answer_fallback",
+                extra={"repository_id": payload.repository_id, "snapshot_id": snapshot.id},
+            )
     answer = GroundedAnswer(
         id=new_id("ans"),
         workspace_id=actor.workspace_id,
@@ -258,6 +283,7 @@ def create_grounded_answer(
         evidence_ids=list(result.evidence_ids),
         scope_json={"snapshot_id": snapshot.id, "snapshot_sha": snapshot.commit_sha},
         limitations=list(result.limitations),
+        retrieval_version=retrieval_version,
         created_by=actor.user_id,
     )
     db.add(answer)

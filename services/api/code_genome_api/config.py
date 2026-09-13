@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     retention_days: int = 365
     rate_limit_per_minute: int = 120
     max_request_bytes: int = 1_000_000
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "CODE_GENOME_GEMINI_API_KEY"),
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias=AliasChoices("GEMINI_MODEL", "CODE_GENOME_GEMINI_MODEL"),
+    )
+    gemini_timeout_seconds: float = 20
+    gemini_max_output_tokens: int = 700
 
     def validate_runtime(self) -> None:
         if self.environment == "production" and self.auth_mode != "oidc":
@@ -46,6 +56,10 @@ class Settings(BaseSettings):
             raise RuntimeError("Rate limit must be between 10 and 100000 requests per minute")
         if not 100_000 <= self.max_request_bytes <= 10_000_000:
             raise RuntimeError("Maximum request bytes must be between 100000 and 10000000")
+        if not 1 <= self.gemini_timeout_seconds <= 60:
+            raise RuntimeError("Gemini timeout must be between 1 and 60 seconds")
+        if not 128 <= self.gemini_max_output_tokens <= 4096:
+            raise RuntimeError("Gemini output tokens must be between 128 and 4096")
 
     @property
     def allowed_origins(self) -> list[str]:

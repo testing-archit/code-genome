@@ -42,6 +42,8 @@ services:
       CODE_GENOME_CORS_ORIGINS: http://localhost:3000
       CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY: ${CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY:-}
       CODE_GENOME_CREDENTIAL_KEY_VERSION: ${CODE_GENOME_CREDENTIAL_KEY_VERSION:-local-v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
     command: sh -c "alembic upgrade head && uvicorn code_genome_api.main:app --host 0.0.0.0 --port 8000"
     depends_on:
       postgres:
