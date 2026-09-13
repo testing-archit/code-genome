@@ -1,12 +1,12 @@
 [
   {
-    "bugId": "SEC-001",
+    "bugId": "BUG-1",
     "verdict": "REAL_BUG",
-    "trueSeverity": "Critical",
+    "trueSeverity": "Medium",
     "confidenceScore": 99,
     "confidenceLabel": "high",
     "verificationMode": "INDEPENDENTLY_VERIFIED",
-    "analysisSummary": "Before Phase 5, protected routes accepted caller-controlled X-User-ID identity. A guessed member and workspace ID enabled remote impersonation. Production now fails closed unless OIDC is configured, and signed issuer/audience-bound JWT subjects drive membership checks.",
-    "suggestedFix": "Implemented in auth.py and config.py; retain the production startup and cryptographic OIDC validation tests."
+    "analysisSummary": "A normal recency question follows a reachable API path but returns a refusal because lexical overlap is the only retrieval strategy. Recent commit documents are already ordered newest-first and available, so the refusal is incorrect for this valid intent.",
+    "suggestedFix": "Recognize explicit recent-change intent and select the newest commit documents before applying the ordinary lexical fallback. Add a regression test that verifies ordering, limits, and citations."
   }
 ]

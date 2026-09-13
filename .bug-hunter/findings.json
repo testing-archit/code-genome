@@ -1,1 +1,19 @@
-[]
+[
+  {
+    "bugId": "BUG-1",
+    "severity": "Medium",
+    "category": "logic",
+    "file": "packages/intelligence/code_genome_intelligence/engine.py",
+    "lines": "79-89",
+    "claim": "Valid recency questions are rejected unless a commit message literally contains the query terms.",
+    "evidence": "answer_question ranks only lexical token overlap and returns no documents when overlap is zero, even though callers provide commits newest-first.",
+    "runtimeTrigger": "Ask 'what were the latest changes about' for a repository with indexed commits whose messages do not contain the words latest or changes.",
+    "crossReferences": [
+      "services/api/code_genome_api/routes/intelligence.py:238-255"
+    ],
+    "confidenceScore": 99,
+    "confidenceLabel": "high",
+    "stride": "N/A",
+    "cwe": "N/A"
+  }
+]

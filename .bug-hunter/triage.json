@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-09-13T18:46:26.606Z",
+  "target": "/Users/archit/Desktop/Projects/code-genome/packages/intelligence/code_genome_intelligence/engine.py",
+  "totalFiles": 1,
+  "strategy": "single-file",
+  "modeFile": "modes/single-file.md",
+  "needsLoop": false,
+  "fileBudget": 40,
+  "avgLines": 0,
+  "riskMap": {
+    "critical": [
+      "engine.py"
+    ],
+    "high": [],
+    "medium": [],
+    "low": [],
+    "context-only": []
+  },
+  "domains": [],
+  "scanOrder": [
+    "engine.py"
+  ],
+  "tokenEstimate": {
+    "recon": 0,
+    "perHunterChunk": 0,
+    "total": 0
+  },
+  "recommendations": [
+    "Single file — run full pipeline directly, skip Recon."
+  ]
+}

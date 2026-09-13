@@ -1,11 +1,20 @@
-# Security review — 2026-09-13
+# Bug Hunter Report
 
-Full STRIDE and dependency review completed against Phase 5.
+- Findings reviewed: 1
+- Confirmed: 1
+- Dismissed: 0
+- Manual review: 0
 
-- Open high/critical findings: **0**
-- Remediated critical findings: **1** (`SEC-001`, development-header impersonation)
-- Node dependency findings: **0**
-- Python dependency findings: **0**
-- Verified controls: OIDC fail-closed production mode, tenant denial tests, bounded Git execution, encrypted/erased credentials, scheduled mirror deletion, request/body limits, admin retention, audited export.
+## Confirmed Bugs
 
-Residual deployment requirements: managed KMS, PostgreSQL RLS, immutable off-database audit sink, TLS, aggregate gateway throttling, worker CPU/memory/disk/egress limits, image scanning, and signed provenance.
+- BUG-1 | Medium | packages/intelligence/code_genome_intelligence/engine.py | Valid recency questions are rejected unless a commit message literally contains the query terms.
+  Confidence: 99 (high) | INDEPENDENTLY_VERIFIED
+  Analysis: A normal recency question follows a reachable API path but returns a refusal because lexical overlap is the only retrieval strategy. Recent commit documents are already ordered newest-first and available, so the refusal is incorrect for this valid intent.
+
+## Manual Review
+
+- None
+
+## Dismissed Findings
+
+- None

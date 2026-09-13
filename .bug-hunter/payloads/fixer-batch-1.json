@@ -1,0 +1,24 @@
+{
+  "skillDir": "/Users/archit/.agents/skills/bug-hunter",
+  "bugs": [
+    {
+      "bugId": "BUG-1",
+      "severity": "Medium",
+      "file": "packages/intelligence/code_genome_intelligence/engine.py",
+      "lines": "79-89",
+      "description": "Explicit recent-change questions are rejected when commit messages have no literal query-term overlap.",
+      "suggestedFix": "Recognize recent-change intent and select the newest commit documents before lexical fallback."
+    }
+  ],
+  "techStack": {
+    "framework": "Python package called by FastAPI",
+    "auth": "OIDC or development headers at the API boundary",
+    "database": "SQLAlchemy with ordered RepositoryCommit retrieval",
+    "dependencies": []
+  },
+  "outputSchema": {
+    "artifact": "fix-report",
+    "schemaVersion": 1,
+    "schemaFile": "schemas/fix-report.schema.json"
+  }
+}

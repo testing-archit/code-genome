@@ -1,0 +1,47 @@
+{
+  "version": "3.0.0",
+  "fix_branch": "main",
+  "base_commit": "6d4e71c33a426444061df59abe2a279b505a42e9",
+  "dry_run": false,
+  "circuit_breaker_tripped": false,
+  "phase2_timeout_hit": false,
+  "fixes": [
+    {
+      "bugId": "BUG-1",
+      "severity": "MEDIUM",
+      "status": "FIXED",
+      "files": [
+        "packages/intelligence/code_genome_intelligence/engine.py",
+        "packages/intelligence/tests/test_engine.py",
+        "services/api/code_genome_api/services/gemini.py",
+        "services/api/tests/test_gemini.py"
+      ],
+      "lines": "79-99",
+      "commit": "e7b94b9",
+      "description": "Recent-change questions now retrieve newest commits and produce citation-constrained Gemini summaries."
+    }
+  ],
+  "verification": {
+    "baseline_pass": 45,
+    "baseline_fail": 0,
+    "flaky_tests": 0,
+    "final_pass": 46,
+    "final_fail": 0,
+    "new_failures": 0,
+    "resolved_failures": 0,
+    "typecheck_pass": true,
+    "build_pass": true,
+    "fixer_bugs_found": 0
+  },
+  "summary": {
+    "total_confirmed": 1,
+    "eligible": 1,
+    "manual_review": 0,
+    "fixed": 1,
+    "fix_reverted": 0,
+    "fix_failed": 0,
+    "skipped": 0,
+    "fixer_bug": 0,
+    "partial": 0
+  }
+}

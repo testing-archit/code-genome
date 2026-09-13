@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "eligible": 1,
+  "canary_size": 1,
+  "rollout_size": 0,
+  "manual_review": 0,
+  "fixer_batches": 1,
+  "queue": [
+    {
+      "bugId": "BUG-1",
+      "strategy": "safe-autofix",
+      "files": [
+        "packages/intelligence/code_genome_intelligence/engine.py",
+        "packages/intelligence/tests/test_engine.py"
+      ]
+    }
+  ]
+}

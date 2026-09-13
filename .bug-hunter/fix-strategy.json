@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "confirmed": 1,
+  "eligible": 1,
+  "manual_review": 0,
+  "clusters": [
+    {
+      "id": "retrieval-intent",
+      "strategy": "safe-autofix",
+      "bugs": ["BUG-1"],
+      "files": ["packages/intelligence/code_genome_intelligence/engine.py"],
+      "reason": "The behavior is isolated, deterministic, and covered by a direct regression test."
+    }
+  ]
+}

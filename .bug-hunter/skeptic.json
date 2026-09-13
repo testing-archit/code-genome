@@ -1,0 +1,8 @@
+[
+  {
+    "bugId": "BUG-1",
+    "response": "ACCEPT",
+    "analysisSummary": "The query produces the terms latest, changes, and about, while ordinary commit messages need not contain any of them. The route supplies commits newest-first, but answer_question discards that ordering and refuses when literal overlap is zero. No fallback intent handling or other mitigation exists.",
+    "counterEvidence": "None; engine.py:79-89 confirms overlap is the only selection path, and intelligence.py:238-255 confirms recent commits are available to it."
+  }
+]
