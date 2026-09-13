@@ -149,7 +149,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 .architecture-section { margin-top: 30px; border: 1px solid var(--line-strong); background: var(--paper); }
 .architecture-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(290px, .75fr); }
-.module-strata { padding: 18px 20px; border-right: 1px solid var(--line-strong); display: grid; gap: 12px; }
+.module-strata { padding: 18px 20px; border-right: 1px solid var(--line-strong); display: grid; align-content: start; gap: 12px; }
 .module-strata article { border: 1px solid var(--line); }
 .module-band { position: relative; min-height: 45px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; overflow: hidden; border-bottom: 1px solid var(--line); }
 .module-band::before { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--module-confidence); background: #e4ebff; border-right: 2px solid var(--signal); }
