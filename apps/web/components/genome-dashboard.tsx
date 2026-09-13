@@ -68,9 +68,17 @@ export function GenomeDashboard() {
   useEffect(() => {
     if (!latestRun || terminalStates.includes(latestRun.state)) return;
     const timer = window.setInterval(() => {
-      void getAnalysis(latestRun.id).then((updated) => {
-        setRuns((current) => [updated, ...current.filter((run) => run.id !== updated.id)]);
-      });
+      void getAnalysis(latestRun.id)
+        .then((updated) => {
+          setRuns((current) => [updated, ...current.filter((run) => run.id !== updated.id)]);
+        })
+        .catch((caught: unknown) => {
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Analysis status could not be refreshed.",
+          );
+        });
     }, 900);
     return () => window.clearInterval(timer);
   }, [latestRun]);
