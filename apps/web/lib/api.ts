@@ -1,6 +1,7 @@
 import type {
   AnalysisRun,
   Architecture,
+  DeliveryReport,
   Evidence,
   GraphProjection,
   ProblemDetail,
@@ -79,4 +80,45 @@ export function getRepositoryInventory(repositoryId: string): Promise<Repository
 
 export function getArchitecture(repositoryId: string): Promise<Architecture> {
   return request<Architecture>(`/repositories/${repositoryId}/architecture?relationship_limit=100`);
+}
+
+export function createDeliveryReport(
+  repositoryId: string,
+  text: string,
+  from: string,
+  to: string,
+  branch: string,
+): Promise<DeliveryReport> {
+  return request<DeliveryReport>("/delivery-reports", {
+    method: "POST",
+    headers: requestHeaders(crypto.randomUUID()),
+    body: JSON.stringify({
+      repository_id: repositoryId,
+      text,
+      scope: {
+        from: new Date(`${from}T00:00:00Z`).toISOString(),
+        to: new Date(`${to}T23:59:59Z`).toISOString(),
+        branches: [branch],
+      },
+    }),
+  });
+}
+
+export function assessDeliveryReport(reportId: string): Promise<DeliveryReport> {
+  return request<DeliveryReport>(`/delivery-reports/${reportId}/assessments`, {
+    method: "POST",
+  });
+}
+
+export async function downloadDeliveryReport(reportId: string): Promise<void> {
+  const response = await fetch(`${apiUrl}/delivery-reports/${reportId}/download`, {
+    headers: requestHeaders(),
+  });
+  if (!response.ok) throw new Error("The delivery audit could not be downloaded.");
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `delivery-audit-${reportId}.md`;
+  link.click();
+  URL.revokeObjectURL(url);
 }

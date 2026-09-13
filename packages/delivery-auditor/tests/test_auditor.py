@@ -23,3 +23,9 @@ def test_assessment_requires_deployment_evidence_and_cites_repository_matches() 
     assert external.status == "EXTERNAL_EVIDENCE_REQUIRED"
     assert external.evidence_ids == ()
     assert external.limitations
+
+
+def test_delivery_narrative_is_not_mistaken_for_live_deployment() -> None:
+    claim = parse_claims("Added the delivery auditor API and claim ledger.")[0]
+
+    assert claim.claim_type == "repository_change"

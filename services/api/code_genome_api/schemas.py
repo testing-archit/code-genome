@@ -244,3 +244,67 @@ class ArchitectureResponse(BaseModel):
     hotspots: list[ArchitectureHotspotResponse]
     co_changes: list[ArchitectureCoChangeResponse]
     limitations: list[str]
+
+
+class DeliveryScope(BaseModel):
+    from_: datetime = Field(alias="from")
+    to: datetime
+    branches: list[str] = Field(default_factory=lambda: ["main"], min_length=1, max_length=10)
+    include_prs: bool = False
+    include_ci: bool = False
+    include_deployments: bool = False
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("branches")
+    @classmethod
+    def validate_scope_branches(cls, values: list[str]) -> list[str]:
+        if len(set(values)) != len(values):
+            raise ValueError("branches must be unique")
+        return [validate_ref(value) for value in values]
+
+
+class DeliveryReportCreate(BaseModel):
+    repository_id: str = Field(min_length=1, max_length=32)
+    text: str = Field(min_length=1, max_length=100_000)
+    scope: DeliveryScope
+
+
+class DeliveryAssessmentResponse(BaseModel):
+    status: str
+    confidence: float
+    rationale: str
+    evidence_ids: list[str]
+    limitations: list[str]
+    analysis_version: str
+    assessed_at: datetime
+
+
+class DeliveryClaimResponse(BaseModel):
+    id: str
+    ordinal: int
+    original_text: str
+    start_offset: int
+    end_offset: int
+    claim_type: str
+    assessment: DeliveryAssessmentResponse | None
+
+
+class UnreportedChangeResponse(BaseModel):
+    path: str
+    evidence_ids: list[str]
+    materiality: float
+    explanation: str
+
+
+class DeliveryReportResponse(BaseModel):
+    id: str
+    repository_id: str
+    raw_text: str
+    scope: DeliveryScope
+    submitted_by: str
+    parser_version: str
+    created_at: datetime
+    claims: list[DeliveryClaimResponse]
+    unreported_changes: list[UnreportedChangeResponse]
+    limitations: list[str]

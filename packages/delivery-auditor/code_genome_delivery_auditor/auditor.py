@@ -8,10 +8,10 @@ STOP_WORDS = {"and", "the", "for", "with", "from", "that", "this", "into", "was"
 
 
 def _claim_type(text: str) -> str:
-    lowered = text.lower()
-    if any(word in lowered for word in ("deploy", "production", "released", "live")):
+    words = {word.lower() for word in WORD_PATTERN.findall(text)}
+    if words & {"deploy", "deployed", "deployment", "production", "released", "live"}:
         return "deployment"
-    if any(word in lowered for word in ("test", "ci", "coverage", "passing")):
+    if words & {"test", "tests", "tested", "ci", "coverage", "passing"}:
         return "test"
     return "repository_change"
 

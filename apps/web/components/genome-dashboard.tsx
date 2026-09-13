@@ -4,6 +4,7 @@ import type {
   AnalysisRun,
   AnalysisState,
   Architecture,
+  DeliveryReport,
   Evidence,
   GraphProjection,
   Repository,
@@ -12,8 +13,11 @@ import type {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
+  assessDeliveryReport,
   createAnalysis,
+  createDeliveryReport,
   createRepository,
+  downloadDeliveryReport,
   getAnalysis,
   getArchitecture,
   getEvidence,
@@ -190,7 +194,7 @@ export function GenomeDashboard() {
           <a className="nav-item active" href="#repositories"><span>Repository map</span><span className="nav-index">1</span></a>
           <a className="nav-item" href="#runs"><span>Analysis runs</span><span className="nav-index">2</span></a>
           <a className="nav-item" href="#architecture"><span>Architecture strata</span><span className="nav-index">3</span></a>
-          <span className="nav-item disabled"><span>Delivery auditor</span><span className="soon">Phase 3</span></span>
+          <a className="nav-item" href="#delivery-auditor"><span>Delivery auditor</span><span className="nav-index">4</span></a>
         </nav>
 
         <div className="scope-note">
@@ -302,6 +306,8 @@ export function GenomeDashboard() {
 
         {activeArchitecture && <ArchitectureMap architecture={activeArchitecture} />}
 
+        {selected && <DeliveryAuditor repository={selected} />}
+
         <section className="runs-section" id="runs">
           <div className="section-heading"><h2>Analysis ledger</h2><span>Immutable run history</span></div>
           <div className="ledger-head"><span>State</span><span>Run</span><span>Scope</span><span>Started</span><span>Result</span></div>
@@ -321,6 +327,110 @@ export function GenomeDashboard() {
 
       {isAdding && <RepositoryDialog onClose={() => setIsAdding(false)} onSave={addRepository} />}
     </main>
+  );
+}
+
+function dateInput(daysAgo: number) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
+
+function DeliveryAuditor({ repository }: { repository: Repository }) {
+  const [text, setText] = useState("");
+  const [from, setFrom] = useState(() => dateInput(30));
+  const [to, setTo] = useState(() => dateInput(0));
+  const [report, setReport] = useState<DeliveryReport | null>(null);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError(null);
+    try {
+      const created = await createDeliveryReport(
+        repository.id,
+        text,
+        from,
+        to,
+        repository.default_branch,
+      );
+      setReport(await assessDeliveryReport(created.id));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The report could not be assessed.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <section className="auditor-section" id="delivery-auditor">
+      <div className="section-heading">
+        <h2>Delivery auditor</h2>
+        <span>Claims measured against immutable repository evidence</span>
+      </div>
+      <div className="auditor-layout">
+        <form className="report-input" onSubmit={submit}>
+          <div className="auditor-kicker">Submitted narrative / {repository.external_id}</div>
+          <label htmlFor="delivery-text">What was delivered?</label>
+          <textarea
+            id="delivery-text"
+            maxLength={100000}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="Added invoice export. Tests are passing. Deployed to production."
+            required
+            rows={8}
+            value={text}
+          />
+          <div className="scope-inputs">
+            <label>From<input max={to} onChange={(event) => setFrom(event.target.value)} required type="date" value={from} /></label>
+            <label>To<input min={from} onChange={(event) => setTo(event.target.value)} required type="date" value={to} /></label>
+            <label>Branch<input readOnly value={repository.default_branch} /></label>
+          </div>
+          <p>CI and deployment claims remain external until trusted provider evidence is connected.</p>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <button className="primary-action" disabled={working} type="submit">
+            {working ? "Assessing claims…" : "Run delivery audit"}
+          </button>
+        </form>
+        <div className="claim-ledger" aria-live="polite">
+          <div className="claim-ledger-head">
+            <div><span>Assessment ledger</span><h3>{report ? `${report.claims.length} atomic claims` : "Awaiting a report"}</h3></div>
+            {report && <button onClick={() => void downloadDeliveryReport(report.id)} type="button">Download .md</button>}
+          </div>
+          {!report ? (
+            <div className="auditor-empty"><strong>Exact words stay attached.</strong><span>Every claim retains its source span, status, evidence IDs, and limitations.</span></div>
+          ) : (
+            <>
+              {report.claims.map((claim) => (
+                <article className="claim-row" key={claim.id}>
+                  <div className="claim-source"><span>#{claim.ordinal + 1} · chars {claim.start_offset}–{claim.end_offset}</span><strong>{claim.original_text}</strong></div>
+                  <div className={`claim-status claim-${claim.assessment?.status.toLowerCase()}`}>
+                    <strong>{claim.assessment?.status.replaceAll("_", " ")}</strong>
+                    <span>{Math.round((claim.assessment?.confidence ?? 0) * 100)}% match</span>
+                  </div>
+                  <p>{claim.assessment?.rationale}</p>
+                  <div className="claim-evidence">
+                    {(claim.assessment?.evidence_ids.length ? claim.assessment.evidence_ids : claim.assessment?.limitations ?? []).map((item) => <code key={item}>{item}</code>)}
+                  </div>
+                </article>
+              ))}
+              <div className="unreported-band">
+                <strong>Unreported change surface</strong><span>{report.unreported_changes.length} paths</span>
+              </div>
+              {report.unreported_changes.slice(0, 8).map((change) => (
+                <div className="unreported-row" key={change.path}>
+                  <span title={change.path}>{change.path}</span>
+                  <i style={{ width: `${Math.max(4, change.materiality * 100)}%` }} />
+                  <small>{change.explanation}</small>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

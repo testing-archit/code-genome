@@ -142,3 +142,46 @@ export type Architecture = {
   }>;
   limitations: string[];
 };
+
+export type DeliveryAssessment = {
+  status: "VERIFIED" | "PARTIALLY_VERIFIED" | "NO_SUPPORTING_EVIDENCE" | "EXTERNAL_EVIDENCE_REQUIRED";
+  confidence: number;
+  rationale: string;
+  evidence_ids: string[];
+  limitations: string[];
+  analysis_version: string;
+  assessed_at: string;
+};
+
+export type DeliveryReport = {
+  id: string;
+  repository_id: string;
+  raw_text: string;
+  scope: {
+    from: string;
+    to: string;
+    branches: string[];
+    include_prs: boolean;
+    include_ci: boolean;
+    include_deployments: boolean;
+  };
+  submitted_by: string;
+  parser_version: string;
+  created_at: string;
+  claims: Array<{
+    id: string;
+    ordinal: number;
+    original_text: string;
+    start_offset: number;
+    end_offset: number;
+    claim_type: string;
+    assessment: DeliveryAssessment | null;
+  }>;
+  unreported_changes: Array<{
+    path: string;
+    evidence_ids: string[];
+    materiality: number;
+    explanation: string;
+  }>;
+  limitations: string[];
+};

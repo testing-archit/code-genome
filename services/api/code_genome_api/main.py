@@ -10,7 +10,15 @@ from .config import get_settings
 from .database import SessionLocal
 from .errors import AppError, app_error_handler, validation_error_handler
 from .models import Membership, Workspace
-from .routes import analyses, architecture, graph, health, repositories, workspaces
+from .routes import (
+    analyses,
+    architecture,
+    delivery_reports,
+    graph,
+    health,
+    repositories,
+    workspaces,
+)
 
 
 def _bootstrap_demo_workspace() -> None:
@@ -61,3 +69,4 @@ app.include_router(repositories.router, prefix="/api/v1")
 app.include_router(analyses.router, prefix="/api/v1")
 app.include_router(graph.router, prefix="/api/v1")
 app.include_router(architecture.router, prefix="/api/v1")
+app.include_router(delivery_reports.router, prefix="/api/v1")
