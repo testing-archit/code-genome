@@ -1,11 +1,8 @@
-import re
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import urlparse
 
+from code_genome_git import normalize_github_url, validate_ref
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-BRANCH_PATTERN = re.compile(r"^(?!/|.*(?:\.\.|//|@\{|\\|\s))[^~^:?*\[]+(?<![/.])$")
 
 
 class WorkspaceCreate(BaseModel):
@@ -27,27 +24,12 @@ class RepositoryCreate(BaseModel):
     @field_validator("clone_url")
     @classmethod
     def validate_clone_url(cls, value: str) -> str:
-        parsed = urlparse(value)
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname != "github.com"
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("clone_url must be a credential-free HTTPS GitHub URL")
-        parts = [part for part in parsed.path.removesuffix(".git").split("/") if part]
-        if len(parts) != 2 or any(part in {".", ".."} for part in parts):
-            raise ValueError("clone_url must identify one GitHub owner and repository")
-        return f"https://github.com/{parts[0]}/{parts[1]}.git"
+        return normalize_github_url(value)
 
     @field_validator("default_branch")
     @classmethod
     def validate_branch(cls, value: str) -> str:
-        if not BRANCH_PATTERN.fullmatch(value):
-            raise ValueError("default_branch is not a valid Git ref name")
-        return value
+        return validate_ref(value)
 
 
 class RepositoryResponse(BaseModel):
@@ -79,8 +61,7 @@ class AnalysisCreate(BaseModel):
         if len(set(values)) != len(values):
             raise ValueError("refs must be unique")
         for value in values:
-            if len(value) > 255 or not BRANCH_PATTERN.fullmatch(value):
-                raise ValueError(f"invalid Git ref: {value}")
+            validate_ref(value)
         return values
 
 

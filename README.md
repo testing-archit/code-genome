@@ -44,7 +44,7 @@ npm install
 uv sync --extra dev
 npm run lint && npm run typecheck && npm run build
 uv run ruff check services infra packages
-uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome
+uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome packages/git/code_genome_git
 uv run pytest
 ```
 
@@ -60,6 +60,7 @@ The current test analysis validates the durable `QUEUED → RUNNING → SUCCEEDE
 - Responsive repository dashboard with live job polling and explicit evidence limitations.
 - Deterministic Tree-sitter extraction for JS, JSX, TS, and TSX with source-range diagnostics.
 - Stable snapshot-scoped structural graph construction with evidence on every node and edge.
+- Hardened bare-Git reader that pins commit/tree IDs and reads bounded source blobs without checkout.
 
 ## Evidence contract
 

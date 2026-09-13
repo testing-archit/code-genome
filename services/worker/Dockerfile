@@ -5,5 +5,5 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY services ./services
+COPY packages ./packages
 RUN pip install --no-cache-dir .
-

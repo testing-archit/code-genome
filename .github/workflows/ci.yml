@@ -27,7 +27,7 @@ jobs:
       - run: uv sync --locked --extra dev
       - run: uv run ruff format --check services infra packages
       - run: uv run ruff check services infra packages
-      - run: uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome
+      - run: uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome packages/git/code_genome_git
       - run: uv run pytest
       - run: CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic upgrade head
       - run: uv run pip-audit
