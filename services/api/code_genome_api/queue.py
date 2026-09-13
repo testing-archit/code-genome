@@ -3,7 +3,7 @@ from arq.connections import RedisSettings
 from fastapi import BackgroundTasks
 
 from .config import get_settings
-from .services.analysis import run_fake_analysis
+from .services.structural_analysis import run_analysis
 
 
 async def enqueue_analysis(run_id: str, background_tasks: BackgroundTasks) -> None:
@@ -11,7 +11,7 @@ async def enqueue_analysis(run_id: str, background_tasks: BackgroundTasks) -> No
     if settings.job_backend == "manual":
         return
     if settings.job_backend == "inline":
-        background_tasks.add_task(run_fake_analysis, run_id)
+        background_tasks.add_task(run_analysis, run_id)
         return
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:

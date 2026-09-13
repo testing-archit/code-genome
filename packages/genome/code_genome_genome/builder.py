@@ -1,4 +1,5 @@
 import hashlib
+import posixpath
 from pathlib import PurePosixPath
 
 from code_genome_analyzers import FileAnalysis, ImportFact, SourceSpan
@@ -6,6 +7,7 @@ from code_genome_analyzers import FileAnalysis, ImportFact, SourceSpan
 from .types import EvidenceRef, GenomeDiagnostic, GenomeEdge, GenomeGraph, GenomeNode
 
 GRAPH_BUILDER_VERSION = "structural-genome@0.1.0"
+SOURCE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
@@ -13,9 +15,11 @@ def _stable_id(prefix: str, *parts: object) -> str:
     return f"{prefix}_{hashlib.sha256(material.encode()).hexdigest()[:24]}"
 
 
-def _file_evidence(snapshot_sha: str, analysis: FileAnalysis) -> EvidenceRef:
+def _file_evidence(repository_id: str, snapshot_sha: str, analysis: FileAnalysis) -> EvidenceRef:
     return EvidenceRef(
-        id=_stable_id("ev", snapshot_sha, analysis.path, analysis.content_sha256, "file"),
+        id=_stable_id(
+            "ev", repository_id, snapshot_sha, analysis.path, analysis.content_sha256, "file"
+        ),
         kind="source_file",
         repository_sha=snapshot_sha,
         path=analysis.path,
@@ -25,10 +29,14 @@ def _file_evidence(snapshot_sha: str, analysis: FileAnalysis) -> EvidenceRef:
 
 
 def _range_evidence(
-    snapshot_sha: str, analysis: FileAnalysis, span: SourceSpan, fact_kind: str
+    repository_id: str,
+    snapshot_sha: str,
+    analysis: FileAnalysis,
+    span: SourceSpan,
+    fact_kind: str,
 ) -> EvidenceRef:
     return EvidenceRef(
-        id=_stable_id("ev", snapshot_sha, analysis.path, span, fact_kind),
+        id=_stable_id("ev", repository_id, snapshot_sha, analysis.path, span, fact_kind),
         kind="source_range",
         repository_sha=snapshot_sha,
         path=analysis.path,
@@ -37,11 +45,19 @@ def _range_evidence(
     )
 
 
-def _import_candidates(source_path: str, specifier: str) -> tuple[str, ...]:
+def _normalized_import_base(source_path: str, specifier: str) -> str | None:
     parent = PurePosixPath(source_path).parent
-    base = parent.joinpath(specifier)
-    if any(part == ".." for part in base.parts) or str(base).startswith("/"):
+    normalized = posixpath.normpath(posixpath.join(str(parent), specifier))
+    if normalized == ".." or normalized.startswith("../") or normalized.startswith("/"):
+        return None
+    return normalized
+
+
+def _import_candidates(source_path: str, specifier: str) -> tuple[str, ...]:
+    normalized = _normalized_import_base(source_path, specifier)
+    if normalized is None:
         return ()
+    base = PurePosixPath(normalized)
     suffix = base.suffix.lower()
     candidates: list[PurePosixPath] = [base]
     if suffix in {".js", ".jsx"}:
@@ -70,7 +86,9 @@ def _resolve_import(source_path: str, item: ImportFact, known_paths: set[str]) -
     )
 
 
-def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> GenomeGraph:
+def build_structural_graph(
+    repository_id: str, snapshot_sha: str, files: list[FileAnalysis]
+) -> GenomeGraph:
     """Build a deterministic, snapshot-scoped graph from extracted source facts."""
     if not snapshot_sha or any(
         character not in "0123456789abcdef" for character in snapshot_sha.lower()
@@ -89,9 +107,9 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
     symbols_by_file: dict[str, dict[str, list[str]]] = {}
 
     for analysis in ordered_files:
-        file_evidence = _file_evidence(snapshot_sha, analysis)
+        file_evidence = _file_evidence(repository_id, snapshot_sha, analysis)
         evidence[file_evidence.id] = file_evidence
-        file_id = _stable_id("node", snapshot_sha, "FILE", analysis.path)
+        file_id = _stable_id("node", repository_id, snapshot_sha, "FILE", analysis.path)
         file_node_ids[analysis.path] = file_id
         nodes[file_id] = GenomeNode(
             id=file_id,
@@ -107,13 +125,15 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
 
         symbols_by_name: dict[str, list[str]] = {}
         for symbol in analysis.symbols:
-            symbol_evidence = _range_evidence(snapshot_sha, analysis, symbol.span, "symbol")
+            symbol_evidence = _range_evidence(
+                repository_id, snapshot_sha, analysis, symbol.span, "symbol"
+            )
             evidence[symbol_evidence.id] = symbol_evidence
             natural_key = (
                 f"{analysis.path}#{symbol.kind}:{symbol.name}:"
                 f"{symbol.span.start_line}:{symbol.span.start_column}"
             )
-            symbol_id = _stable_id("node", snapshot_sha, "SYMBOL", natural_key)
+            symbol_id = _stable_id("node", repository_id, snapshot_sha, "SYMBOL", natural_key)
             nodes[symbol_id] = GenomeNode(
                 id=symbol_id,
                 kind="SYMBOL",
@@ -132,7 +152,9 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
                 },
                 evidence_ids=(symbol_evidence.id,),
             )
-            edge_id = _stable_id("edge", snapshot_sha, "DECLARES", file_id, symbol_id)
+            edge_id = _stable_id(
+                "edge", repository_id, snapshot_sha, "DECLARES", file_id, symbol_id
+            )
             edges[edge_id] = GenomeEdge(
                 id=edge_id,
                 kind="DECLARES",
@@ -146,7 +168,7 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
 
         for diagnostic in analysis.diagnostics:
             diagnostic_evidence = _range_evidence(
-                snapshot_sha, analysis, diagnostic.span, diagnostic.code
+                repository_id, snapshot_sha, analysis, diagnostic.span, diagnostic.code
             )
             evidence[diagnostic_evidence.id] = diagnostic_evidence
             diagnostics.append(
@@ -165,9 +187,13 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
             if exported.local_name is None:
                 continue
             for symbol_id in symbols_by_file[analysis.path].get(exported.local_name, []):
-                exported_evidence = _range_evidence(snapshot_sha, analysis, exported.span, "export")
+                exported_evidence = _range_evidence(
+                    repository_id, snapshot_sha, analysis, exported.span, "export"
+                )
                 evidence[exported_evidence.id] = exported_evidence
-                edge_id = _stable_id("edge", snapshot_sha, "EXPORTS", file_id, symbol_id)
+                edge_id = _stable_id(
+                    "edge", repository_id, snapshot_sha, "EXPORTS", file_id, symbol_id
+                )
                 edges[edge_id] = GenomeEdge(
                     id=edge_id,
                     kind="EXPORTS",
@@ -178,11 +204,36 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
                 )
 
         for imported in analysis.imports:
-            imported_evidence = _range_evidence(snapshot_sha, analysis, imported.span, "import")
+            imported_evidence = _range_evidence(
+                repository_id, snapshot_sha, analysis, imported.span, "import"
+            )
             evidence[imported_evidence.id] = imported_evidence
             resolved = _resolve_import(analysis.path, imported, known_paths)
             if resolved:
                 target_id = file_node_ids[resolved]
+            elif (
+                imported.module.startswith(".")
+                and PurePosixPath(imported.module).suffix.lower()
+                and PurePosixPath(imported.module).suffix.lower() not in SOURCE_SUFFIXES
+            ):
+                normalized_asset = _normalized_import_base(analysis.path, imported.module)
+                module_key = f"asset:{normalized_asset or imported.module}"
+                target_id = _stable_id("node", repository_id, snapshot_sha, "MODULE", module_key)
+                existing = nodes.get(target_id)
+                evidence_ids = tuple(
+                    sorted({*(existing.evidence_ids if existing else ()), imported_evidence.id})
+                )
+                nodes[target_id] = GenomeNode(
+                    id=target_id,
+                    kind="MODULE",
+                    natural_key=module_key,
+                    properties={
+                        "specifier": imported.module,
+                        "external": False,
+                        "asset": True,
+                    },
+                    evidence_ids=evidence_ids,
+                )
             elif imported.module.startswith("."):
                 diagnostics.append(
                     GenomeDiagnostic(
@@ -196,7 +247,7 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
                 continue
             else:
                 module_key = f"external:{imported.module}"
-                target_id = _stable_id("node", snapshot_sha, "MODULE", module_key)
+                target_id = _stable_id("node", repository_id, snapshot_sha, "MODULE", module_key)
                 existing = nodes.get(target_id)
                 evidence_ids = tuple(
                     sorted({*(existing.evidence_ids if existing else ()), imported_evidence.id})
@@ -208,7 +259,7 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
                     properties={"specifier": imported.module, "external": True},
                     evidence_ids=evidence_ids,
                 )
-            edge_id = _stable_id("edge", snapshot_sha, "IMPORTS", file_id, target_id)
+            edge_id = _stable_id("edge", repository_id, snapshot_sha, "IMPORTS", file_id, target_id)
             edges[edge_id] = GenomeEdge(
                 id=edge_id,
                 kind="IMPORTS",
@@ -220,6 +271,7 @@ def build_structural_graph(snapshot_sha: str, files: list[FileAnalysis]) -> Geno
 
     extractor_version = ordered_files[0].analyzer_version if ordered_files else "none"
     return GenomeGraph(
+        repository_id=repository_id,
         repository_sha=snapshot_sha.lower(),
         analysis_version=f"{GRAPH_BUILDER_VERSION}+{extractor_version}",
         nodes=tuple(sorted(nodes.values(), key=lambda item: (item.kind, item.natural_key))),

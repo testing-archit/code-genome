@@ -1,4 +1,4 @@
-import type { AnalysisRun, ProblemDetail, Repository } from "@code-genome/contracts";
+import type { AnalysisRun, GraphProjection, ProblemDetail, Repository } from "@code-genome/contracts";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 const workspaceId = process.env.NEXT_PUBLIC_WORKSPACE_ID ?? "ws_demo";
@@ -54,3 +54,7 @@ export function getAnalysis(runId: string): Promise<AnalysisRun> {
   return request<AnalysisRun>(`/analyses/${runId}`);
 }
 
+export function getGraph(repositoryId: string, snapshotSha: string): Promise<GraphProjection> {
+  const query = new URLSearchParams({ snapshot_sha: snapshotSha, limit: "1000" });
+  return request<GraphProjection>(`/repositories/${repositoryId}/graph?${query}`);
+}

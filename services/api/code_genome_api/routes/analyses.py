@@ -77,6 +77,7 @@ async def create_analysis(
         requested_refs=refs,
         state="QUEUED",
         progress=0,
+        version="structural-genome@0.1.0",
         simulate_failure=payload.simulate_failure,
     )
     db.add(run)

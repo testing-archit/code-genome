@@ -2,12 +2,12 @@ import asyncio
 
 from arq.connections import RedisSettings
 from code_genome_api.config import get_settings
-from code_genome_api.services.analysis import run_fake_analysis
+from code_genome_api.services.structural_analysis import run_analysis
 
 
 async def analyze_repository(ctx: dict[str, object], run_id: str) -> None:
     del ctx
-    await asyncio.to_thread(run_fake_analysis, run_id)
+    await asyncio.to_thread(run_analysis, run_id)
 
 
 class WorkerSettings:

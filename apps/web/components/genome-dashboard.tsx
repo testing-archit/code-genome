@@ -1,9 +1,9 @@
 "use client";
 
-import type { AnalysisRun, AnalysisState, Repository } from "@code-genome/contracts";
+import type { AnalysisRun, AnalysisState, GraphProjection, Repository } from "@code-genome/contracts";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { createAnalysis, createRepository, getAnalysis, listAnalyses, listRepositories } from "../lib/api";
+import { createAnalysis, createRepository, getAnalysis, getGraph, listAnalyses, listRepositories } from "../lib/api";
 import { BranchIcon, HelixMark, PlusIcon } from "./icons";
 
 const terminalStates: AnalysisState[] = ["SUCCEEDED", "FAILED"];
@@ -24,6 +24,7 @@ export function GenomeDashboard() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
+  const [graph, setGraph] = useState<GraphProjection | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -34,6 +35,7 @@ export function GenomeDashboard() {
     [repositories, selectedId],
   );
   const latestRun = runs[0] ?? null;
+  const activeGraph = graph?.scope.repository_id === selectedId ? graph : null;
 
   useEffect(() => {
     let active = true;
@@ -72,6 +74,23 @@ export function GenomeDashboard() {
     }, 900);
     return () => window.clearInterval(timer);
   }, [latestRun]);
+
+  useEffect(() => {
+    if (!selectedId || latestRun?.state !== "SUCCEEDED" || !latestRun.snapshot_sha) return;
+    let active = true;
+    void getGraph(selectedId, latestRun.snapshot_sha)
+      .then((projection) => {
+        if (active) setGraph(projection);
+      })
+      .catch((caught: unknown) => {
+        if (active) {
+          setError(caught instanceof Error ? caught.message : "Published graph could not be loaded.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [latestRun?.snapshot_sha, latestRun?.state, selectedId]);
 
   async function startAnalysis() {
     if (!selected) return;
@@ -183,7 +202,7 @@ export function GenomeDashboard() {
                     ["Registered", true],
                     ["Queued", latestRun !== null],
                     ["Running", latestRun?.state === "RUNNING" || latestRun?.state === "SUCCEEDED"],
-                    ["Published", false],
+                    ["Published", Boolean(latestRun?.snapshot_sha && latestRun.state === "SUCCEEDED")],
                   ].map(([label, active]) => (
                     <div className={`rail-stage ${active ? "reached" : ""}`} key={String(label)}>
                       <span className="rail-node" /><span>{label}</span>
@@ -194,12 +213,14 @@ export function GenomeDashboard() {
                 <div className="analysis-action">
                   <div>
                     <h3>{latestRun ? `Latest run: ${stateLabel(latestRun.state)}` : "Structural genome not started"}</h3>
-                    <p>{latestRun?.diagnostics[0] ?? "This foundation run validates job state only. It does not inspect or claim facts about source code."}</p>
+                    <p>{latestRun?.diagnostics[0] ?? "Start a bounded structural analysis to pin the selected branch and extract evidence-backed JS/TS facts."}</p>
                   </div>
                   <button disabled={isStarting || (latestRun ? !terminalStates.includes(latestRun.state) : false)} onClick={startAnalysis} type="button">
-                    {isStarting ? "Queuing…" : latestRun ? "Run again" : "Start test run"}
+                    {isStarting ? "Queuing…" : latestRun ? "Run again" : "Start analysis"}
                   </button>
                 </div>
+
+                {activeGraph && <GraphSummary graph={activeGraph} />}
               </>
             ) : (
               <div className="panel-placeholder"><span>Select a repository to inspect its evidence scope.</span></div>
@@ -226,6 +247,27 @@ export function GenomeDashboard() {
 
       {isAdding && <RepositoryDialog onClose={() => setIsAdding(false)} onSave={addRepository} />}
     </main>
+  );
+}
+
+function GraphSummary({ graph }: { graph: GraphProjection }) {
+  const files = graph.nodes.filter((node) => node.kind === "FILE").length;
+  const symbols = graph.nodes.filter((node) => node.kind === "SYMBOL").length;
+  const imports = graph.edges.filter((edge) => edge.type === "IMPORTS").length;
+  return (
+    <div className="graph-summary" aria-label="Published structural graph summary">
+      <div className="graph-metrics">
+        <div><strong>{files}</strong><span>Source files</span></div>
+        <div><strong>{symbols}</strong><span>Symbols</span></div>
+        <div><strong>{imports}</strong><span>Imports</span></div>
+        <div><strong>{graph.diagnostics.length}</strong><span>Diagnostics</span></div>
+      </div>
+      <div className="snapshot-line">
+        <span>Pinned snapshot</span>
+        <code title={graph.scope.snapshot_sha}>{graph.scope.snapshot_sha.slice(0, 12)}</code>
+        <span>{graph.scope.analysis_version}</span>
+      </div>
+    </div>
   );
 }
 

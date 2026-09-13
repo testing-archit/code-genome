@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -61,7 +62,7 @@ class AnalysisRun(Base):
     )
     snapshot_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     requested_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
-    version: Mapped[str] = mapped_column(String(80), default="foundation-fake@0.1.0")
+    version: Mapped[str] = mapped_column(String(80), default="structural-genome@0.1.0")
     state: Mapped[str] = mapped_column(String(24), default="QUEUED", index=True)
     progress: Mapped[float] = mapped_column(Float, default=0)
     diagnostics: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -73,6 +74,108 @@ class AnalysisRun(Base):
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     repository: Mapped[Repository] = relationship(back_populates="analyses")
+
+
+class RepositorySnapshot(Base):
+    __tablename__ = "repository_snapshots"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "commit_sha", name="uq_repository_snapshot_commit"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    commit_sha: Mapped[str] = mapped_column(String(64), index=True)
+    tree_sha: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"))
+    analysis_version: Mapped[str] = mapped_column(String(160))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Provenance(Base):
+    __tablename__ = "provenance"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40))
+    repository_sha: Mapped[str] = mapped_column(String(64), index=True)
+    file_path: Mapped[str] = mapped_column(String(1000))
+    start_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    start_column: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_column: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extractor_version: Mapped[str] = mapped_column(String(160))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class GraphNode(Base):
+    __tablename__ = "graph_nodes"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "kind", "natural_key", name="uq_snapshot_node"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    natural_key: Mapped[str] = mapped_column(String(1000))
+    properties_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class GraphEdge(Base):
+    __tablename__ = "graph_edges"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    type: Mapped[str] = mapped_column(String(40), index=True)
+    from_node: Mapped[str] = mapped_column(ForeignKey("graph_nodes.id", ondelete="CASCADE"))
+    to_node: Mapped[str] = mapped_column(ForeignKey("graph_nodes.id", ondelete="CASCADE"))
+    confidence: Mapped[float] = mapped_column(Float)
+    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="RESTRICT"))
+
+
+class ParseDiagnostic(Base):
+    __tablename__ = "parse_diagnostics"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    code: Mapped[str] = mapped_column(String(80), index=True)
+    message: Mapped[str] = mapped_column(String(500))
+    file_path: Mapped[str] = mapped_column(String(1000))
+    start_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    start_column: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_column: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provenance_id: Mapped[str | None] = mapped_column(
+        ForeignKey("provenance.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class IdempotencyRecord(Base):

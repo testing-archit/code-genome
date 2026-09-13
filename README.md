@@ -48,7 +48,7 @@ uv run mypy services/api/code_genome_api services/worker/code_genome_worker pack
 uv run pytest
 ```
 
-The current test analysis validates the durable `QUEUED → RUNNING → SUCCEEDED/FAILED` lifecycle only. It does not clone or inspect repository contents, and therefore never emits a snapshot SHA or repository facts. Structural ingestion starts in Phase 1.
+Structural analysis currently supports public GitHub repositories. It clones a bounded bare repository without checkout, pins the selected branch to commit/tree SHAs, reads only supported JS/TS blobs, and atomically publishes the graph with source-range provenance. Private GitHub App credentials and incremental fetch are the next ingestion checkpoint.
 
 ## Foundation status
 

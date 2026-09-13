@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from code_genome_git import normalize_github_url, validate_ref
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -52,7 +53,7 @@ class AnalysisState(StrEnum):
 
 
 class AnalysisCreate(BaseModel):
-    refs: list[str] = Field(default_factory=list, max_length=20)
+    refs: list[str] = Field(default_factory=list, max_length=1)
     simulate_failure: bool = False
 
     @field_validator("refs")
@@ -87,3 +88,62 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+
+
+class GraphScope(BaseModel):
+    repository_id: str
+    snapshot_id: str
+    snapshot_sha: str
+    analysis_version: str
+    sources: list[str]
+
+
+class GraphNodeResponse(BaseModel):
+    id: str
+    kind: str
+    natural_key: str
+    properties: dict[str, Any]
+    evidence_ids: list[str]
+
+
+class GraphEdgeResponse(BaseModel):
+    id: str
+    type: str
+    from_node: str
+    to_node: str
+    confidence: float
+    evidence_id: str
+
+
+class DiagnosticResponse(BaseModel):
+    id: str
+    code: str
+    message: str
+    path: str
+    start_line: int | None
+    start_column: int | None
+    end_line: int | None
+    end_column: int | None
+    evidence_id: str | None
+
+
+class GraphProjectionResponse(BaseModel):
+    scope: GraphScope
+    nodes: list[GraphNodeResponse]
+    edges: list[GraphEdgeResponse]
+    diagnostics: list[DiagnosticResponse]
+    next_cursor: str | None
+    limitations: list[str]
+
+
+class EvidenceResponse(BaseModel):
+    id: str
+    kind: str
+    repository_sha: str
+    path: str
+    start_line: int | None
+    start_column: int | None
+    end_line: int | None
+    end_column: int | None
+    extractor_version: str
+    observed_at: datetime

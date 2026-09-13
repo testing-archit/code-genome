@@ -10,6 +10,7 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `POST /repositories/{id}/analyses` | queue snapshot analysis | `202 AnalysisRun` |
 | `GET /analyses/{id}` | job progress/diagnostics | `200 AnalysisRun` |
 | `GET /repositories/{id}/graph` | filtered snapshot graph | `200 GraphProjection` |
+| `GET /evidence/{id}` | immutable source provenance locator | `200 Evidence` |
 | `GET /repositories/{id}/impact` | rank impact for file/symbol/change | `200 ImpactResult` |
 | `POST /delivery-reports` | create report + claims | `201 DeliveryReport` |
 | `POST /delivery-reports/{id}/assessments` | queue verification | `202 AnalysisRun` |
@@ -62,3 +63,9 @@ Use RFC 9457 problem JSON: `type`, `title`, `status`, `detail`, `instance`, `req
 - `429 RATE_LIMITED`; `503 ANALYSIS_DEGRADED`.
 
 Use `Idempotency-Key` on all state-changing POSTs. Cursor pagination and maximum graph limits are mandatory.
+
+## Structural graph projection
+
+`GET /repositories/{id}/graph` selects the latest published snapshot unless `snapshot_sha` is supplied. `limit` is capped at 1,000 nodes and `cursor` advances through stable kind/natural-key order. Edges on a page include only relationships whose endpoints are both present on that page; the response states this limitation whenever pagination is active.
+
+Every projection returns the repository/snapshot IDs, pinned commit SHA, analysis version, source classes searched, node evidence IDs, edge evidence ID and confidence, parse/import diagnostics, and a next cursor. Unpublished or cross-workspace snapshots return `404` without revealing their existence.

@@ -47,6 +47,7 @@ class GenomeDiagnostic:
 
 @dataclass(frozen=True)
 class GenomeGraph:
+    repository_id: str
     repository_sha: str
     analysis_version: str
     nodes: tuple[GenomeNode, ...] = field(default_factory=tuple)
