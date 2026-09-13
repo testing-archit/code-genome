@@ -185,3 +185,42 @@ export type DeliveryReport = {
   }>;
   limitations: string[];
 };
+
+export type RiskAnalysis = {
+  repository_id: string;
+  snapshot_sha: string;
+  scores: Array<{
+    path: string;
+    score: number;
+    features: Record<string, number>;
+    rationale: string;
+    evidence_ids: string[];
+    model_version: string;
+  }>;
+  limitations: string[];
+};
+
+export type ImpactAnalysis = {
+  repository_id: string;
+  snapshot_sha: string;
+  selected_path: string;
+  impacted: Array<{
+    path: string;
+    score: number;
+    reasons: string[];
+    evidence_ids: string[];
+  }>;
+  limitations: string[];
+};
+
+export type GroundedAnswer = {
+  id: string;
+  repository_id: string;
+  question: string;
+  answer: string;
+  evidence_ids: string[];
+  scope: Record<string, string>;
+  limitations: string[];
+  retrieval_version: string;
+  created_at: string;
+};

@@ -33,13 +33,13 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git"]
+where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git", "packages/intelligence"]
 include = ["code_genome_*"]
 namespaces = false
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
-testpaths = ["services/api/tests", "services/worker/tests", "packages/analyzers/tests", "packages/delivery-auditor/tests", "packages/evolution/tests", "packages/genome/tests", "packages/git/tests"]
+testpaths = ["services/api/tests", "services/worker/tests", "packages/analyzers/tests", "packages/delivery-auditor/tests", "packages/evolution/tests", "packages/genome/tests", "packages/git/tests", "packages/intelligence/tests"]
 
 [tool.ruff]
 line-length = 100

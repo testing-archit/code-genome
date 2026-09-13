@@ -338,6 +338,68 @@ class UnreportedChange(Base):
     explanation: Mapped[str] = mapped_column(Text)
 
 
+class RiskScore(Base):
+    __tablename__ = "risk_scores"
+    __table_args__ = (UniqueConstraint("snapshot_id", "path", name="uq_snapshot_risk_path"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(String(1000))
+    score: Mapped[float] = mapped_column(Float, index=True)
+    features_json: Mapped[dict[str, float]] = mapped_column(JSON)
+    rationale: Mapped[str] = mapped_column(Text)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    model_version: Mapped[str] = mapped_column(String(80), default="risk-baseline@0.1.0")
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class GroundedAnswer(Base):
+    __tablename__ = "grounded_answers"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    limitations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    retrieval_version: Mapped[str] = mapped_column(String(80), default="lexical-grounding@0.1.0")
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AnswerFeedback(Base):
+    __tablename__ = "answer_feedback"
+    __table_args__ = (
+        UniqueConstraint("answer_id", "user_id", name="uq_answer_feedback_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    answer_id: Mapped[str] = mapped_column(
+        ForeignKey("grounded_answers.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(String(120))
+    rating: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Provenance(Base):
     __tablename__ = "provenance"
 

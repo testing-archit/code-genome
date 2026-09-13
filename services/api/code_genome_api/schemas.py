@@ -308,3 +308,62 @@ class DeliveryReportResponse(BaseModel):
     claims: list[DeliveryClaimResponse]
     unreported_changes: list[UnreportedChangeResponse]
     limitations: list[str]
+
+
+class RiskScoreResponse(BaseModel):
+    path: str
+    score: float
+    features: dict[str, float]
+    rationale: str
+    evidence_ids: list[str]
+    model_version: str
+
+
+class RiskResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    scores: list[RiskScoreResponse]
+    limitations: list[str]
+
+
+class ImpactItemResponse(BaseModel):
+    path: str
+    score: float
+    reasons: list[str]
+    evidence_ids: list[str]
+
+
+class ImpactResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    selected_path: str
+    impacted: list[ImpactItemResponse]
+    limitations: list[str]
+
+
+class GroundedAnswerCreate(BaseModel):
+    repository_id: str = Field(min_length=1, max_length=32)
+    question: str = Field(min_length=3, max_length=2000)
+
+
+class GroundedAnswerResponse(BaseModel):
+    id: str
+    repository_id: str
+    question: str
+    answer: str
+    evidence_ids: list[str]
+    scope: dict[str, Any]
+    limitations: list[str]
+    retrieval_version: str
+    created_at: datetime
+
+
+class AnswerFeedbackCreate(BaseModel):
+    rating: int = Field(ge=-1, le=1)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class AnswerFeedbackResponse(BaseModel):
+    answer_id: str
+    rating: int
+    recorded: bool

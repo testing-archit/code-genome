@@ -3,10 +3,13 @@ import type {
   Architecture,
   DeliveryReport,
   Evidence,
+  GroundedAnswer,
   GraphProjection,
+  ImpactAnalysis,
   ProblemDetail,
   Repository,
   RepositoryInventory,
+  RiskAnalysis,
 } from "@code-genome/contracts";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
@@ -121,4 +124,27 @@ export async function downloadDeliveryReport(reportId: string): Promise<void> {
   link.download = `delivery-audit-${reportId}.md`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export function getRisk(repositoryId: string): Promise<RiskAnalysis> {
+  return request<RiskAnalysis>(`/repositories/${repositoryId}/risk`);
+}
+
+export function getImpact(repositoryId: string, path: string): Promise<ImpactAnalysis> {
+  const query = new URLSearchParams({ path });
+  return request<ImpactAnalysis>(`/repositories/${repositoryId}/impact?${query}`);
+}
+
+export function askRepository(repositoryId: string, question: string): Promise<GroundedAnswer> {
+  return request<GroundedAnswer>("/chat/answers", {
+    method: "POST",
+    body: JSON.stringify({ repository_id: repositoryId, question }),
+  });
+}
+
+export function rateAnswer(answerId: string, rating: -1 | 1): Promise<void> {
+  return request(`/chat/answers/${answerId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ rating }),
+  });
 }

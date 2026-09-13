@@ -6,13 +6,17 @@ import type {
   Architecture,
   DeliveryReport,
   Evidence,
+  GroundedAnswer,
   GraphProjection,
+  ImpactAnalysis,
   Repository,
   RepositoryInventory,
+  RiskAnalysis,
 } from "@code-genome/contracts";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
+  askRepository,
   assessDeliveryReport,
   createAnalysis,
   createDeliveryReport,
@@ -22,9 +26,12 @@ import {
   getArchitecture,
   getEvidence,
   getGraph,
+  getImpact,
   getRepositoryInventory,
+  getRisk,
   listAnalyses,
   listRepositories,
+  rateAnswer,
 } from "../lib/api";
 import { BranchIcon, HelixMark, PlusIcon } from "./icons";
 
@@ -194,7 +201,8 @@ export function GenomeDashboard() {
           <a className="nav-item active" href="#repositories"><span>Repository map</span><span className="nav-index">1</span></a>
           <a className="nav-item" href="#runs"><span>Analysis runs</span><span className="nav-index">2</span></a>
           <a className="nav-item" href="#architecture"><span>Architecture strata</span><span className="nav-index">3</span></a>
-          <a className="nav-item" href="#delivery-auditor"><span>Delivery auditor</span><span className="nav-index">4</span></a>
+          <a className="nav-item" href="#intelligence"><span>Change intelligence</span><span className="nav-index">4</span></a>
+          <a className="nav-item" href="#delivery-auditor"><span>Delivery auditor</span><span className="nav-index">5</span></a>
         </nav>
 
         <div className="scope-note">
@@ -306,6 +314,8 @@ export function GenomeDashboard() {
 
         {activeArchitecture && <ArchitectureMap architecture={activeArchitecture} />}
 
+        {selected && latestRun?.state === "SUCCEEDED" && <IntelligenceConsole repository={selected} />}
+
         {selected && <DeliveryAuditor repository={selected} />}
 
         <section className="runs-section" id="runs">
@@ -327,6 +337,97 @@ export function GenomeDashboard() {
 
       {isAdding && <RepositoryDialog onClose={() => setIsAdding(false)} onSave={addRepository} />}
     </main>
+  );
+}
+
+function IntelligenceConsole({ repository }: { repository: Repository }) {
+  const [risk, setRisk] = useState<RiskAnalysis | null>(null);
+  const [impact, setImpact] = useState<ImpactAnalysis | null>(null);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<GroundedAnswer | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [feedback, setFeedback] = useState<-1 | 1 | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getRisk(repository.id)
+      .then((result) => {
+        if (!active) return;
+        setRisk(result);
+        setSelectedPath(result.scores[0]?.path ?? "");
+      })
+      .catch(() => {
+        if (active) setRisk(null);
+      });
+    return () => { active = false; };
+  }, [repository.id]);
+
+  useEffect(() => {
+    if (!selectedPath) return;
+    let active = true;
+    void getImpact(repository.id, selectedPath)
+      .then((result) => { if (active) setImpact(result); })
+      .catch(() => { if (active) setImpact(null); });
+    return () => { active = false; };
+  }, [repository.id, selectedPath]);
+
+  async function ask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAsking(true);
+    setFeedback(null);
+    try {
+      setAnswer(await askRepository(repository.id, question));
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  async function rate(rating: -1 | 1) {
+    if (!answer) return;
+    await rateAnswer(answer.id, rating);
+    setFeedback(rating);
+  }
+
+  return (
+    <section className="intelligence-section" id="intelligence">
+      <div className="section-heading"><h2>Change intelligence</h2><span>Transparent baseline · cited graph traversal · extractive answers</span></div>
+      <div className="intelligence-grid">
+        <div className="risk-rank">
+          <div className="intel-head"><span>Relative risk</span><strong>{risk?.scores.length ?? 0} ranked paths</strong></div>
+          {risk?.scores.slice(0, 8).map((item, index) => (
+            <button className={selectedPath === item.path ? "active" : ""} key={item.path} onClick={() => setSelectedPath(item.path)} type="button">
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <div><strong>{item.path}</strong><small>{item.rationale}</small></div>
+              <i style={{ height: `${Math.max(8, item.score * 100)}%` }} />
+              <b>{Math.round(item.score * 100)}</b>
+            </button>
+          )) ?? <p className="intel-empty">Evolutionary evidence is required before risk can be ranked.</p>}
+        </div>
+        <div className="impact-column">
+          <div className="intel-head"><span>Impact radius</span><strong title={selectedPath}>{selectedPath || "Select a ranked path"}</strong></div>
+          {impact?.impacted.length ? impact.impacted.slice(0, 8).map((item) => (
+            <div className="impact-row" key={item.path}>
+              <div><strong>{item.path}</strong><small>{item.reasons.join(" · ")}</small></div>
+              <span>{Math.round(item.score * 100)}</span>
+              <code>{item.evidence_ids[0]}</code>
+            </div>
+          )) : <p className="intel-empty">No one-hop import or repeated co-change relationship is supported for this path.</p>}
+        </div>
+        <form className="grounded-ask" onSubmit={ask}>
+          <div className="intel-head"><span>Grounded question</span><strong>{answer?.retrieval_version ?? "Latest published snapshot"}</strong></div>
+          <label htmlFor="repository-question">Ask only what the repository can support</label>
+          <div className="ask-line"><input id="repository-question" onChange={(event) => setQuestion(event.target.value)} placeholder="Where does invoice export live?" required value={question} /><button disabled={asking} type="submit">{asking ? "Searching…" : "Ask"}</button></div>
+          {answer && (
+            <div className="answer-field">
+              <p>{answer.answer}</p>
+              <div className="answer-citations">{(answer.evidence_ids.length ? answer.evidence_ids : answer.limitations).map((item) => <code key={item}>{item}</code>)}</div>
+              <div className="answer-footer"><span>Snapshot {answer.scope.snapshot_sha?.slice(0, 12)}</span><div><button aria-pressed={feedback === 1} onClick={() => void rate(1)} type="button">Useful</button><button aria-pressed={feedback === -1} onClick={() => void rate(-1)} type="button">Needs work</button></div></div>
+            </div>
+          )}
+        </form>
+      </div>
+    </section>
   );
 }
 

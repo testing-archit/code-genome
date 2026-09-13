@@ -214,6 +214,44 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .unreported-row small { margin-top: 5px; color: var(--ink-muted); font-size: 8px; }
 .unreported-row i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--warning); }
 
+.intelligence-section { margin-top: 30px; border: 1px solid var(--line-strong); background: var(--paper); }
+.intelligence-grid { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(300px, .9fr) minmax(360px, 1.15fr); }
+.risk-rank, .impact-column { border-right: 1px solid var(--line-strong); min-width: 0; }
+.intel-head { min-height: 57px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: #f1f5f4; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+.intel-head span { color: var(--ink-muted); font-size: 8px; text-transform: uppercase; letter-spacing: .08em; }
+.intel-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.risk-rank > button { position: relative; width: 100%; min-height: 58px; padding: 8px 11px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 4px 26px; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.risk-rank > button:hover, .risk-rank > button.active { background: #e9efff; }
+.risk-rank > button.active { box-shadow: inset 3px 0 var(--signal); }
+.risk-rank > button > span { color: var(--ink-muted); font: 8px "SFMono-Regular", Consolas, monospace; }
+.risk-rank > button div { min-width: 0; }
+.risk-rank > button strong, .risk-rank > button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.risk-rank > button strong { font: 9px "SFMono-Regular", Consolas, monospace; }
+.risk-rank > button small { margin-top: 4px; color: var(--ink-muted); font-size: 7px; }
+.risk-rank > button i { align-self: end; width: 4px; max-height: 38px; background: var(--warning); }
+.risk-rank > button b { font-size: 9px; text-align: right; }
+.impact-row { min-height: 69px; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 5px 9px; border-bottom: 1px solid var(--line); }
+.impact-row div { min-width: 0; }
+.impact-row strong, .impact-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.impact-row strong { font: 9px "SFMono-Regular", Consolas, monospace; }
+.impact-row small { margin-top: 5px; color: var(--ink-muted); font-size: 8px; }
+.impact-row > span { height: 25px; display: grid; place-items: center; background: var(--ink); color: white; font-size: 8px; }
+.impact-row code { grid-column: 1 / -1; color: var(--success); font-size: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.intel-empty { margin: 0; min-height: 180px; padding: 28px 16px; display: grid; place-items: center; color: var(--ink-muted); text-align: center; font-size: 9px; line-height: 1.5; }
+.grounded-ask { min-width: 0; }
+.grounded-ask > label { display: block; padding: 15px 15px 7px; font-size: 10px; font-weight: 680; }
+.ask-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 0 15px 15px; }
+.ask-line input { min-width: 0; border: 1px solid var(--line-strong); border-right: 0; border-radius: 0; padding: 10px; font-size: 10px; }
+.ask-line button { border: 0; background: var(--signal); color: white; padding: 0 13px; font-size: 10px; cursor: pointer; }
+.answer-field { margin: 0 15px 15px; border: 1px solid var(--line); }
+.answer-field > p { margin: 0; padding: 14px; border-left: 3px solid var(--signal); line-height: 1.55; font-size: 10px; }
+.answer-citations { padding: 8px 11px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px; background: #f1f5f4; }
+.answer-citations code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 3px 5px; border: 1px solid var(--line); background: white; font-size: 7px; }
+.answer-footer { min-height: 37px; padding: 5px 9px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; color: var(--ink-muted); font-size: 7px; }
+.answer-footer div { display: flex; gap: 4px; }
+.answer-footer button { border: 1px solid var(--line); background: white; padding: 4px 6px; color: var(--ink-muted); font-size: 7px; cursor: pointer; }
+.answer-footer button[aria-pressed="true"] { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
+
 .runs-section { margin-top: 30px; border: 1px solid var(--line-strong); background: var(--paper); }
 .ledger-head, .ledger-row { display: grid; grid-template-columns: 130px 100px 1fr 1.25fr 1.2fr; gap: 14px; align-items: center; padding: 0 20px; }
 .ledger-head { min-height: 38px; background: #e2e9e8; color: var(--ink-muted); font-size: 10px; border-bottom: 1px solid var(--line); }
@@ -261,6 +299,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .repository-list { border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .architecture-layout { grid-template-columns: minmax(0, 1fr); }
   .auditor-layout { grid-template-columns: minmax(0, 1fr); }
+  .intelligence-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grounded-ask { grid-column: 1 / -1; border-top: 1px solid var(--line-strong); }
+  .impact-column { border-right: 0; }
   .report-input { border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .module-strata { border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .evidence-workbench { grid-template-columns: minmax(0, 1fr); }
@@ -298,4 +339,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .scope-inputs label:last-child { border-bottom: 0; }
   .claim-row { grid-template-columns: 1fr; }
   .claim-evidence { justify-content: flex-start; }
+  .intelligence-grid { grid-template-columns: minmax(0, 1fr); }
+  .risk-rank, .impact-column { border-right: 0; border-bottom: 1px solid var(--line-strong); }
+  .grounded-ask { grid-column: auto; }
 }

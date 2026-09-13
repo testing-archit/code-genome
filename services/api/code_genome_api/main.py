@@ -16,6 +16,7 @@ from .routes import (
     delivery_reports,
     graph,
     health,
+    intelligence,
     repositories,
     workspaces,
 )
@@ -70,3 +71,4 @@ app.include_router(analyses.router, prefix="/api/v1")
 app.include_router(graph.router, prefix="/api/v1")
 app.include_router(architecture.router, prefix="/api/v1")
 app.include_router(delivery_reports.router, prefix="/api/v1")
+app.include_router(intelligence.router, prefix="/api/v1")
