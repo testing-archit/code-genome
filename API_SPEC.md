@@ -13,6 +13,7 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `POST /repositories/{id}/analyses` | queue snapshot analysis | `202 AnalysisRun` |
 | `GET /analyses/{id}` | job progress/diagnostics | `200 AnalysisRun` |
 | `GET /repositories/{id}/inventory` | bounded refs, commits, and file manifest | `200 RepositoryInventory` |
+| `GET /repositories/{id}/architecture` | inferred modules, hotspots, co-change | `200 Architecture` |
 | `GET /repositories/{id}/graph` | filtered snapshot graph | `200 GraphProjection` |
 | `GET /evidence/{id}` | immutable source provenance locator | `200 Evidence` |
 | `GET /repositories/{id}/impact` | rank impact for file/symbol/change | `200 ImpactResult` |

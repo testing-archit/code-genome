@@ -208,3 +208,39 @@ class RepositoryInventoryResponse(BaseModel):
     commits: list[CommitResponse]
     files: list[FileManifestResponse]
     limitations: list[str]
+
+
+class ArchitectureModuleResponse(BaseModel):
+    id: str
+    name: str
+    file_paths: list[str]
+    confidence: float
+    description: str
+    citations: list[str]
+    inferred: bool
+
+
+class ArchitectureHotspotResponse(BaseModel):
+    path: str
+    commit_count: int
+    churn: int
+    score: float
+    citations: list[str]
+
+
+class ArchitectureCoChangeResponse(BaseModel):
+    left_path: str
+    right_path: str
+    commit_count: int
+    confidence: float
+    citations: list[str]
+
+
+class ArchitectureResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    analysis_version: str
+    modules: list[ArchitectureModuleResponse]
+    hotspots: list[ArchitectureHotspotResponse]
+    co_changes: list[ArchitectureCoChangeResponse]
+    limitations: list[str]

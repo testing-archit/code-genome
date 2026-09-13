@@ -151,6 +151,15 @@ def test_publishes_and_serves_an_immutable_structural_graph(
         "src/format.ts",
         "src/index.ts",
     ]
+    architecture = client.get(
+        "/api/v1/repositories/repo_structural/architecture", headers=headers
+    )
+    assert architecture.status_code == 200
+    module = architecture.json()["modules"][0]
+    assert module["name"] == "src"
+    assert module["inferred"] is True
+    assert module["description"].startswith("Inferred")
+    assert module["citations"] == [f"commit:{expected_sha}"]
 
     seed_analysis(session_factory, "run_repeated")
     run_structural_analysis("run_repeated", session_factory, FixtureCloner(bare))

@@ -177,6 +177,96 @@ class FileManifestEntry(Base):
     analyzed: Mapped[bool] = mapped_column(default=False)
 
 
+class FileChange(Base):
+    __tablename__ = "file_changes"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "commit_sha", "path", name="uq_snapshot_commit_file"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    commit_sha: Mapped[str] = mapped_column(String(64), index=True)
+    path: Mapped[str] = mapped_column(String(1000), index=True)
+    authored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    churn: Mapped[int] = mapped_column(Integer)
+
+
+class CoChangeEdge(Base):
+    __tablename__ = "co_change_edges"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "left_path", "right_path", name="uq_snapshot_cochange"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    left_path: Mapped[str] = mapped_column(String(1000))
+    right_path: Mapped[str] = mapped_column(String(1000))
+    commit_count: Mapped[int] = mapped_column(Integer)
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence_shas: Mapped[list[str]] = mapped_column(JSON, default=list)
+    analysis_version: Mapped[str] = mapped_column(String(160))
+
+
+class FileHotspot(Base):
+    __tablename__ = "file_hotspots"
+    __table_args__ = (UniqueConstraint("snapshot_id", "path", name="uq_snapshot_hotspot"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(String(1000))
+    commit_count: Mapped[int] = mapped_column(Integer)
+    churn: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float] = mapped_column(Float, index=True)
+    evidence_shas: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class ModuleCandidate(Base):
+    __tablename__ = "module_candidates"
+    __table_args__ = (UniqueConstraint("snapshot_id", "natural_key", name="uq_snapshot_module"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    natural_key: Mapped[str] = mapped_column(String(1000))
+    file_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
+    confidence: Mapped[float] = mapped_column(Float)
+    description: Mapped[str] = mapped_column(Text)
+    evidence_shas: Mapped[list[str]] = mapped_column(JSON, default=list)
+    inferred: Mapped[bool] = mapped_column(default=True)
+    analysis_version: Mapped[str] = mapped_column(String(160))
+
+
 class Provenance(Base):
     __tablename__ = "provenance"
 

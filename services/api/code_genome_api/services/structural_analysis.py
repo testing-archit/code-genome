@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 from code_genome_analyzers import FileAnalysis, analyze_source
+from code_genome_evolution import EvolutionResult, analyze_evolution, mine_commit_changes
 from code_genome_genome import GenomeGraph, build_structural_graph
 from code_genome_git import (
     GitCredential,
@@ -28,9 +29,13 @@ from ..database import SessionLocal
 from ..models import (
     AnalysisRun,
     BranchRef,
+    CoChangeEdge,
+    FileChange,
+    FileHotspot,
     FileManifestEntry,
     GraphEdge,
     GraphNode,
+    ModuleCandidate,
     ParseDiagnostic,
     Provenance,
     Repository,
@@ -231,6 +236,76 @@ def _persist_manifest(
         )
 
 
+def _persist_evolution(
+    db: Session,
+    repository: Repository,
+    snapshot: RepositorySnapshot,
+    evolution: EvolutionResult,
+) -> None:
+    if db.scalar(select(ModuleCandidate.id).where(ModuleCandidate.snapshot_id == snapshot.id)):
+        return
+    for commit in evolution.commits:
+        per_file_churn = max(1, commit.churn // max(1, len(commit.files)))
+        for path in commit.files:
+            db.add(
+                FileChange(
+                    id=_stable_id("chg", snapshot.id, commit.sha, path),
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    snapshot_id=snapshot.id,
+                    commit_sha=commit.sha,
+                    path=path,
+                    authored_at=commit.authored_at,
+                    churn=per_file_churn,
+                )
+            )
+    for co_change in evolution.co_changes:
+        db.add(
+            CoChangeEdge(
+                id=_stable_id("coe", snapshot.id, co_change.left_path, co_change.right_path),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                snapshot_id=snapshot.id,
+                left_path=co_change.left_path,
+                right_path=co_change.right_path,
+                commit_count=co_change.commit_count,
+                confidence=co_change.confidence,
+                evidence_shas=list(co_change.evidence_shas),
+                analysis_version=evolution.analysis_version,
+            )
+        )
+    for hotspot in evolution.hotspots:
+        db.add(
+            FileHotspot(
+                id=_stable_id("hot", snapshot.id, hotspot.path),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                snapshot_id=snapshot.id,
+                path=hotspot.path,
+                commit_count=hotspot.commit_count,
+                churn=hotspot.churn,
+                score=hotspot.score,
+                evidence_shas=list(hotspot.evidence_shas),
+            )
+        )
+    for module in evolution.modules:
+        db.add(
+            ModuleCandidate(
+                id=_stable_id("mod", snapshot.id, module.key),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                snapshot_id=snapshot.id,
+                natural_key=module.key,
+                file_paths=list(module.files),
+                confidence=module.confidence,
+                description=module.description,
+                evidence_shas=list(module.evidence_shas),
+                inferred=module.inferred,
+                analysis_version=evolution.analysis_version,
+            )
+        )
+
+
 def _persist_graph(
     db: Session,
     run: AnalysisRun,
@@ -387,6 +462,10 @@ def run_structural_analysis(
         commits = git_repository.read_commit_history(
             branch, max_commits=settings.max_history_commits
         )
+        evolution = analyze_evolution(
+            mine_commit_changes(git_repository.git_directory, tuple(item.sha for item in commits)),
+            tuple(item.path for item in source_snapshot.files),
+        )
         _set_progress(session_factory, run_id, 0.4)
 
         with session_factory() as db:
@@ -414,6 +493,7 @@ def run_structural_analysis(
             )
             if existing:
                 _persist_manifest(db, current_repository, existing, source_snapshot)
+                _persist_evolution(db, current_repository, existing, evolution)
                 current_run = db.scalar(
                     select(AnalysisRun).where(
                         AnalysisRun.id == run_id,
@@ -455,7 +535,8 @@ def run_structural_analysis(
             )
             if current_run is None or current_repository is None:
                 raise GitOperationError("Analysis scope disappeared before publication.")
-            _persist_graph(db, current_run, current_repository, source_snapshot, graph)
+            snapshot = _persist_graph(db, current_run, current_repository, source_snapshot, graph)
+            _persist_evolution(db, current_repository, snapshot, evolution)
             current_run.snapshot_sha = source_snapshot.commit_sha
             current_run.version = graph.analysis_version
             current_run.state = "SUCCEEDED"
@@ -466,6 +547,8 @@ def run_structural_analysis(
                 f"{len(analyses)} source files.",
                 f"Recorded {len(graph.diagnostics)} structural diagnostics.",
                 f"Recorded {len(source_snapshot.manifest)} files and {len(commits)} commits.",
+                f"Derived {len(evolution.co_changes)} co-change edges and "
+                f"{len(evolution.modules)} inferred modules.",
                 f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
             ]
             db.commit()
