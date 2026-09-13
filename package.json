@@ -1,0 +1,16 @@
+{
+  "name": "code-genome",
+  "private": true,
+  "workspaces": ["apps/*", "packages/contracts"],
+  "scripts": {
+    "dev": "npm run dev --workspace @code-genome/web",
+    "build": "npm run build --workspace @code-genome/web",
+    "lint": "npm run lint --workspace @code-genome/web",
+    "typecheck": "npm run typecheck --workspace @code-genome/web",
+    "test": "npm run test --workspace @code-genome/web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
+

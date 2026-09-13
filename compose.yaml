@@ -1,0 +1,81 @@
+name: code-genome
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: code_genome
+      POSTGRES_USER: code_genome
+      POSTGRES_PASSWORD: code_genome
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U code_genome"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      CODE_GENOME_DATABASE_URL: postgresql+psycopg://code_genome:code_genome@postgres:5432/code_genome
+      CODE_GENOME_REDIS_URL: redis://redis:6379/0
+      CODE_GENOME_JOB_BACKEND: arq
+      CODE_GENOME_BOOTSTRAP_DEMO: "true"
+      CODE_GENOME_CORS_ORIGINS: http://localhost:3000
+    command: sh -c "alembic upgrade head && uvicorn code_genome_api.main:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    environment:
+      CODE_GENOME_DATABASE_URL: postgresql+psycopg://code_genome:code_genome@postgres:5432/code_genome
+      CODE_GENOME_REDIS_URL: redis://redis:6379/0
+      CODE_GENOME_JOB_BACKEND: arq
+      CODE_GENOME_JOB_DELAY_SECONDS: 1
+    command: arq code_genome_worker.worker.WorkerSettings
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+        NEXT_PUBLIC_WORKSPACE_ID: ws_demo
+        NEXT_PUBLIC_USER_ID: usr_demo
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+

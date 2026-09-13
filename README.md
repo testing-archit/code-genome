@@ -26,14 +26,37 @@ The four product engines are:
 
 Not in MVP: multi-language correctness guarantees, autonomous code changes, production deployment control, automatic claims of vendor dishonesty, or Neo4j as a required dependency.
 
-## Quick start (target developer workflow)
+## Quick start
 
-1. Copy `.env.example` to `.env` and fill only the integrations you enable.
-2. Start Postgres, Redis, API worker/API, and web app using the repository compose configuration (to be added in Phase 0).
-3. Create a workspace and connect a GitHub installation or a narrowly scoped repository token.
-4. Register a repository and choose tracked branches (`prod`, `main`, `development`, etc.).
-5. Run an ingestion. Review the evidence-backed graph and architecture view.
-6. Paste a delivery report with a date range and target branch to run the Delivery Auditor.
+The Phase 0 foundation requires Docker Compose. Start the full stack with:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open the dashboard at [http://localhost:3000](http://localhost:3000) and the API docs at [http://localhost:8000/docs](http://localhost:8000/docs). Compose provisions a development-only `Genome Lab` workspace and runs Postgres, Redis, the FastAPI service, the ARQ worker, and Next.js.
+
+For local checks without containers:
+
+```bash
+npm install
+uv sync --extra dev
+npm run lint && npm run typecheck && npm run build
+uv run ruff check services infra && uv run mypy services/api/code_genome_api services/worker/code_genome_worker
+uv run pytest
+```
+
+The current test analysis validates the durable `QUEUED → RUNNING → SUCCEEDED/FAILED` lifecycle only. It does not clone or inspect repository contents, and therefore never emits a snapshot SHA or repository facts. Structural ingestion starts in Phase 1.
+
+## Foundation status
+
+- Workspace membership boundary and non-leaking cross-tenant lookups.
+- Validated, credential-free GitHub repository registration.
+- Idempotent repository and analysis creation.
+- Versioned SQL migration for workspaces, repositories, analysis runs, and idempotency records.
+- Redis/ARQ worker path plus an inline development mode.
+- Responsive repository dashboard with live job polling and explicit evidence limitations.
 
 ## Evidence contract
 
