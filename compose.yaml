@@ -38,6 +38,8 @@ services:
       CODE_GENOME_JOB_BACKEND: arq
       CODE_GENOME_BOOTSTRAP_DEMO: "true"
       CODE_GENOME_CORS_ORIGINS: http://localhost:3000
+      CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY: ${CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY:-}
+      CODE_GENOME_CREDENTIAL_KEY_VERSION: ${CODE_GENOME_CREDENTIAL_KEY_VERSION:-local-v1}
     command: sh -c "alembic upgrade head && uvicorn code_genome_api.main:app --host 0.0.0.0 --port 8000"
     depends_on:
       postgres:
@@ -56,12 +58,17 @@ services:
       CODE_GENOME_REDIS_URL: redis://redis:6379/0
       CODE_GENOME_JOB_BACKEND: arq
       CODE_GENOME_JOB_DELAY_SECONDS: 1
+      CODE_GENOME_MIRROR_ROOT: /var/lib/code-genome/mirrors
+      CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY: ${CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY:-}
+      CODE_GENOME_CREDENTIAL_KEY_VERSION: ${CODE_GENOME_CREDENTIAL_KEY_VERSION:-local-v1}
     command: arq code_genome_worker.worker.WorkerSettings
     depends_on:
       api:
         condition: service_started
       redis:
         condition: service_healthy
+    volumes:
+      - mirror_data:/var/lib/code-genome/mirrors
 
   web:
     build:
@@ -78,4 +85,4 @@ services:
 
 volumes:
   postgres_data:
-
+  mirror_data:

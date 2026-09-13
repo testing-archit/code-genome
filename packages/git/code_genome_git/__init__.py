@@ -1,21 +1,31 @@
 from .repository import (
+    GitCredential,
     GitOperationError,
     GitRepository,
+    RepositoryBranchRef,
+    RepositoryCommit,
     RepositoryLimitError,
+    RepositoryManifestFile,
     RepositorySourceFile,
     RepositorySourceSnapshot,
     clone_github_repository,
     normalize_github_url,
+    sync_github_repository,
     validate_ref,
 )
 
 __all__ = [
     "GitOperationError",
+    "GitCredential",
     "GitRepository",
+    "RepositoryBranchRef",
+    "RepositoryCommit",
     "RepositoryLimitError",
+    "RepositoryManifestFile",
     "RepositorySourceFile",
     "RepositorySourceSnapshot",
     "clone_github_repository",
     "normalize_github_url",
+    "sync_github_repository",
     "validate_ref",
 ]

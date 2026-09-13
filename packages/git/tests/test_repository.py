@@ -1,12 +1,15 @@
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from code_genome_git import (
+    GitCredential,
     GitOperationError,
     GitRepository,
     RepositoryLimitError,
     normalize_github_url,
+    sync_github_repository,
     validate_ref,
 )
 
@@ -52,6 +55,19 @@ def test_reads_only_supported_blobs_from_a_pinned_snapshot(
     assert [item.path for item in snapshot.files] == ["src/index.ts", "src/value.ts"]
     assert snapshot.files[0].content.startswith(b"import")
     assert snapshot.skipped_oversized_files == ("src/oversized.js",)
+    assert [item.path for item in snapshot.manifest] == [
+        "README.md",
+        "src/index.ts",
+        "src/oversized.js",
+        "src/value.ts",
+    ]
+
+    refs = repository.list_branch_refs()
+    commits = repository.read_commit_history("main")
+    assert refs[0].name == "main"
+    assert refs[0].head_sha == expected_commit
+    assert commits[0].sha == expected_commit
+    assert commits[0].message == "fixture"
 
 
 def test_enforces_file_and_total_size_limits(bare_repository: tuple[GitRepository, str]) -> None:
@@ -82,3 +98,75 @@ def test_rejects_untrusted_urls_and_refs(bare_repository: tuple[GitRepository, s
     repository, _ = bare_repository
     with pytest.raises(GitOperationError):
         repository.resolve_ref("missing")
+
+
+def test_incremental_fetch_uses_a_credential_without_putting_it_in_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from code_genome_git import repository as repository_module
+
+    mirror = tmp_path / "mirror.git"
+    mirror.mkdir()
+    calls: list[tuple[list[str], GitCredential | None]] = []
+
+    def fake_run_git(
+        arguments: list[str],
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int | None = None,
+        credential: GitCredential | None = None,
+    ) -> bytes:
+        del timeout_seconds, max_output_bytes
+        calls.append((arguments, credential))
+        if "--is-bare-repository" in arguments:
+            return b"true\n"
+        if "get-url" in arguments:
+            return b"https://github.com/acme/private.git\n"
+        return b""
+
+    monkeypatch.setattr(repository_module, "_run_git", fake_run_git)
+    credential = GitCredential(token="github_pat_secret_fixture")
+    synced = sync_github_repository(
+        "https://github.com/acme/private",
+        mirror,
+        "main",
+        credential=credential,
+    )
+
+    assert synced.git_directory == mirror
+    fetch_arguments, fetch_credential = calls[-1]
+    assert "fetch" in fetch_arguments
+    assert fetch_credential is credential
+    assert all(credential.token not in argument for argument in fetch_arguments)
+    assert "secret_fixture" not in repr(credential)
+
+
+def test_askpass_secret_is_ephemeral_and_git_errors_are_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from code_genome_git import repository as repository_module
+
+    observed: dict[str, Any] = {}
+
+    def fake_subprocess_run(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        environment = kwargs["env"]
+        helper = Path(environment["GIT_ASKPASS"])
+        observed["arguments"] = arguments
+        observed["secret"] = environment["CODE_GENOME_GIT_PASSWORD"]
+        observed["helper"] = helper
+        observed["helper_body"] = helper.read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(
+            arguments, 1, stdout=b"", stderr=b"fatal: github_pat_redact_fixture rejected"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    credential = GitCredential(token="github_pat_redact_fixture")
+    with pytest.raises(GitOperationError, match=r"\[REDACTED\]"):
+        repository_module._run_git(["fetch", "origin"], timeout_seconds=1, credential=credential)
+
+    assert credential.token not in observed["arguments"]
+    assert observed["secret"] == credential.token
+    assert credential.token not in observed["helper_body"]
+    assert not observed["helper"].exists()

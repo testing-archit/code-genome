@@ -1,39 +1,56 @@
 import hashlib
 import logging
-import tempfile
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
 from code_genome_analyzers import FileAnalysis, analyze_source
 from code_genome_genome import GenomeGraph, build_structural_graph
 from code_genome_git import (
+    GitCredential,
     GitOperationError,
     GitRepository,
+    RepositoryBranchRef,
     RepositoryLimitError,
-    clone_github_repository,
+    RepositorySourceSnapshot,
+    sync_github_repository,
+)
+from code_genome_git import (
+    RepositoryCommit as GitCommit,
 )
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit import record_audit_event
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import (
     AnalysisRun,
+    BranchRef,
+    FileManifestEntry,
     GraphEdge,
     GraphNode,
     ParseDiagnostic,
     Provenance,
     Repository,
+    RepositoryCommit,
+    RepositoryConnection,
     RepositorySnapshot,
     utc_now,
+)
+from .credentials import (
+    CredentialCipher,
+    CredentialConfigurationError,
+    CredentialDecryptionError,
+    EncryptedCredential,
 )
 
 SessionFactory = Callable[[], Session]
 logger = logging.getLogger(__name__)
 
 
-class CloneRepository(Protocol):
+class SyncRepository(Protocol):
     def __call__(
         self,
         clone_url: str,
@@ -42,6 +59,7 @@ class CloneRepository(Protocol):
         *,
         depth: int,
         timeout_seconds: int,
+        credential: GitCredential | None,
     ) -> GitRepository: ...
 
 
@@ -77,10 +95,11 @@ def _fail_run(
 
 
 def _published_snapshot(
-    db: Session, repository_id: str, commit_sha: str
+    db: Session, workspace_id: str, repository_id: str, commit_sha: str
 ) -> RepositorySnapshot | None:
     return db.scalar(
         select(RepositorySnapshot).where(
+            RepositorySnapshot.workspace_id == workspace_id,
             RepositorySnapshot.repository_id == repository_id,
             RepositorySnapshot.commit_sha == commit_sha,
             RepositorySnapshot.published_at.is_not(None),
@@ -88,11 +107,135 @@ def _published_snapshot(
     )
 
 
+def _mirror_path(root: str, workspace_id: str, repository_id: str) -> Path:
+    workspace_key = hashlib.sha256(workspace_id.encode()).hexdigest()[:24]
+    repository_key = hashlib.sha256(repository_id.encode()).hexdigest()[:24]
+    return Path(root).resolve() / workspace_key / f"{repository_key}.git"
+
+
+def _load_git_credential(
+    connection: RepositoryConnection | None,
+    *,
+    workspace_id: str,
+    repository_id: str,
+) -> GitCredential | None:
+    if connection is None:
+        return None
+    settings = get_settings()
+    key = settings.credential_encryption_key
+    if (
+        key is None
+        or not key.get_secret_value()
+        or connection.key_version != settings.credential_key_version
+    ):
+        raise CredentialConfigurationError("Repository credential key is unavailable.")
+    token = CredentialCipher(key.get_secret_value()).decrypt(
+        EncryptedCredential(
+            ciphertext=connection.credential_ciphertext,
+            nonce=connection.credential_nonce,
+        ),
+        workspace_id,
+        repository_id,
+    )
+    return GitCredential(token=token)
+
+
+def _persist_history(
+    db: Session,
+    repository: Repository,
+    refs: tuple[RepositoryBranchRef, ...],
+    commits: tuple[GitCommit, ...],
+) -> None:
+    observed_at = utc_now()
+    existing_refs = {
+        item.name: item
+        for item in db.scalars(
+            select(BranchRef).where(
+                BranchRef.workspace_id == repository.workspace_id,
+                BranchRef.repository_id == repository.id,
+            )
+        )
+    }
+    for ref_item in refs:
+        current = existing_refs.get(ref_item.name)
+        if current:
+            current.head_sha = ref_item.head_sha
+            current.observed_at = observed_at
+        else:
+            db.add(
+                BranchRef(
+                    id=_stable_id("ref", repository.id, ref_item.name),
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    name=ref_item.name,
+                    head_sha=ref_item.head_sha,
+                    observed_at=observed_at,
+                )
+            )
+    existing_shas = set(
+        db.scalars(
+            select(RepositoryCommit.sha).where(
+                RepositoryCommit.workspace_id == repository.workspace_id,
+                RepositoryCommit.repository_id == repository.id,
+                RepositoryCommit.sha.in_([commit_item.sha for commit_item in commits]),
+            )
+        )
+    )
+    for commit_item in commits:
+        if commit_item.sha in existing_shas:
+            continue
+        db.add(
+            RepositoryCommit(
+                id=_stable_id("cmt", repository.id, commit_item.sha),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                sha=commit_item.sha,
+                parent_shas=list(commit_item.parent_shas),
+                author_name=commit_item.author_name,
+                author_email=commit_item.author_email,
+                authored_at=datetime.fromisoformat(commit_item.authored_at),
+                message=commit_item.message,
+                observed_at=observed_at,
+            )
+        )
+
+
+def _persist_manifest(
+    db: Session,
+    repository: Repository,
+    snapshot: RepositorySnapshot,
+    source_snapshot: RepositorySourceSnapshot,
+) -> None:
+    existing = db.scalar(
+        select(FileManifestEntry.id).where(
+            FileManifestEntry.workspace_id == repository.workspace_id,
+            FileManifestEntry.snapshot_id == snapshot.id,
+        )
+    )
+    if existing:
+        return
+    analyzed_paths = {item.path for item in source_snapshot.files}
+    for item in source_snapshot.manifest:
+        db.add(
+            FileManifestEntry(
+                id=_stable_id("file", snapshot.id, item.path),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                snapshot_id=snapshot.id,
+                path=item.path,
+                blob_sha=item.blob_sha,
+                mode=item.mode,
+                size=item.size,
+                analyzed=item.path in analyzed_paths,
+            )
+        )
+
+
 def _persist_graph(
     db: Session,
     run: AnalysisRun,
     repository: Repository,
-    tree_sha: str,
+    source_snapshot: RepositorySourceSnapshot,
     graph: GenomeGraph,
 ) -> RepositorySnapshot:
     snapshot = RepositorySnapshot(
@@ -100,13 +243,14 @@ def _persist_graph(
         workspace_id=run.workspace_id,
         repository_id=repository.id,
         commit_sha=graph.repository_sha,
-        tree_sha=tree_sha,
+        tree_sha=source_snapshot.tree_sha,
         run_id=run.id,
         analysis_version=graph.analysis_version,
         published_at=None,
     )
     db.add(snapshot)
     db.flush()
+    _persist_manifest(db, repository, snapshot, source_snapshot)
 
     for evidence_ref in graph.evidence:
         span = evidence_ref.span
@@ -184,7 +328,7 @@ def _persist_graph(
 def run_structural_analysis(
     run_id: str,
     session_factory: SessionFactory = SessionLocal,
-    clone_repository: CloneRepository = clone_github_repository,
+    sync_repository: SyncRepository = sync_github_repository,
 ) -> None:
     """Publish a pinned structural snapshot, or record a safe terminal failure."""
     settings = get_settings()
@@ -208,68 +352,123 @@ def run_structural_analysis(
             )
             return
         clone_url = repository.clone_url
+        workspace_id = repository.workspace_id
+        repository_id = repository.id
         branch = run.requested_refs[0] if run.requested_refs else repository.default_branch
+        connection = db.scalar(
+            select(RepositoryConnection).where(
+                RepositoryConnection.repository_id == repository.id,
+                RepositoryConnection.workspace_id == repository.workspace_id,
+                RepositoryConnection.revoked_at.is_(None),
+            )
+        )
 
     _set_progress(session_factory, run_id, 0.1)
     try:
-        with tempfile.TemporaryDirectory(prefix="code-genome-analysis-") as temporary_directory:
-            git_repository = clone_repository(
-                clone_url,
-                Path(temporary_directory) / "repository.git",
-                branch,
-                depth=settings.clone_depth,
-                timeout_seconds=settings.clone_timeout_seconds,
-            )
-            source_snapshot = git_repository.read_source_snapshot(
-                branch,
-                max_files=settings.max_source_files,
-                max_file_bytes=settings.max_source_file_bytes,
-                max_total_bytes=settings.max_source_total_bytes,
-            )
-            _set_progress(session_factory, run_id, 0.4)
+        credential = _load_git_credential(
+            connection, workspace_id=workspace_id, repository_id=repository_id
+        )
+        git_repository = sync_repository(
+            clone_url,
+            _mirror_path(settings.mirror_root, workspace_id, repository_id),
+            branch,
+            depth=settings.clone_depth,
+            timeout_seconds=settings.clone_timeout_seconds,
+            credential=credential,
+        )
+        source_snapshot = git_repository.read_source_snapshot(
+            branch,
+            max_files=settings.max_source_files,
+            max_manifest_files=settings.max_manifest_files,
+            max_file_bytes=settings.max_source_file_bytes,
+            max_total_bytes=settings.max_source_total_bytes,
+        )
+        refs = git_repository.list_branch_refs()
+        commits = git_repository.read_commit_history(
+            branch, max_commits=settings.max_history_commits
+        )
+        _set_progress(session_factory, run_id, 0.4)
 
-            with session_factory() as db:
-                existing = _published_snapshot(db, run.repository_id, source_snapshot.commit_sha)
-                if existing:
-                    current_run = db.get(AnalysisRun, run_id)
-                    if current_run:
-                        current_run.snapshot_sha = existing.commit_sha
-                        current_run.version = existing.analysis_version
-                        current_run.state = "SUCCEEDED"
-                        current_run.progress = 1.0
-                        current_run.completed_at = utc_now()
-                        current_run.diagnostics = [
-                            "Reused the existing immutable snapshot for this repository commit."
-                        ]
-                        db.commit()
-                    return
+        with session_factory() as db:
+            current_repository = db.scalar(
+                select(Repository).where(
+                    Repository.id == repository_id,
+                    Repository.workspace_id == workspace_id,
+                )
+            )
+            if current_repository is None:
+                raise GitOperationError("Analysis scope disappeared before publication.")
+            _persist_history(db, current_repository, refs, commits)
+            record_audit_event(
+                db,
+                workspace_id=workspace_id,
+                actor_id="system:worker",
+                action="repository.evidence.fetched",
+                resource_type="repository",
+                resource_id=repository_id,
+                after_hash=hashlib.sha256(source_snapshot.commit_sha.encode()).hexdigest(),
+                request_id=run_id,
+            )
+            existing = _published_snapshot(
+                db, workspace_id, repository_id, source_snapshot.commit_sha
+            )
+            if existing:
+                _persist_manifest(db, current_repository, existing, source_snapshot)
+                current_run = db.scalar(
+                    select(AnalysisRun).where(
+                        AnalysisRun.id == run_id,
+                        AnalysisRun.workspace_id == workspace_id,
+                    )
+                )
+                if current_run:
+                    current_run.snapshot_sha = existing.commit_sha
+                    current_run.version = existing.analysis_version
+                    current_run.state = "SUCCEEDED"
+                    current_run.progress = 1.0
+                    current_run.completed_at = utc_now()
+                    current_run.diagnostics = [
+                        "Reused the existing immutable snapshot for this repository commit."
+                    ]
+                    db.commit()
+                return
+            db.commit()
 
-            analyses: list[FileAnalysis] = [
-                analyze_source(source_file.path, source_file.content)
-                for source_file in source_snapshot.files
+        analyses: list[FileAnalysis] = [
+            analyze_source(source_file.path, source_file.content)
+            for source_file in source_snapshot.files
+        ]
+        graph = build_structural_graph(repository_id, source_snapshot.commit_sha, analyses)
+        _set_progress(session_factory, run_id, 0.7)
+
+        with session_factory() as db:
+            current_run = db.scalar(
+                select(AnalysisRun).where(
+                    AnalysisRun.id == run_id,
+                    AnalysisRun.workspace_id == workspace_id,
+                )
+            )
+            current_repository = db.scalar(
+                select(Repository).where(
+                    Repository.id == repository_id,
+                    Repository.workspace_id == workspace_id,
+                )
+            )
+            if current_run is None or current_repository is None:
+                raise GitOperationError("Analysis scope disappeared before publication.")
+            _persist_graph(db, current_run, current_repository, source_snapshot, graph)
+            current_run.snapshot_sha = source_snapshot.commit_sha
+            current_run.version = graph.analysis_version
+            current_run.state = "SUCCEEDED"
+            current_run.progress = 1.0
+            current_run.completed_at = utc_now()
+            current_run.diagnostics = [
+                f"Published {len(graph.nodes)} nodes and {len(graph.edges)} edges from "
+                f"{len(analyses)} source files.",
+                f"Recorded {len(graph.diagnostics)} structural diagnostics.",
+                f"Recorded {len(source_snapshot.manifest)} files and {len(commits)} commits.",
+                f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
             ]
-            graph = build_structural_graph(run.repository_id, source_snapshot.commit_sha, analyses)
-            _set_progress(session_factory, run_id, 0.7)
-
-            with session_factory() as db:
-                current_run = db.get(AnalysisRun, run_id)
-                current_repository = db.get(Repository, run.repository_id)
-                if current_run is None or current_repository is None:
-                    raise GitOperationError("Analysis scope disappeared before publication.")
-                _persist_graph(db, current_run, current_repository, source_snapshot.tree_sha, graph)
-                current_run.snapshot_sha = source_snapshot.commit_sha
-                current_run.version = graph.analysis_version
-                current_run.state = "SUCCEEDED"
-                current_run.progress = 1.0
-                current_run.completed_at = utc_now()
-                current_run.diagnostics = [
-                    f"Published {len(graph.nodes)} nodes and {len(graph.edges)} edges from "
-                    f"{len(analyses)} source files.",
-                    f"Recorded {len(graph.diagnostics)} structural diagnostics.",
-                    "Skipped "
-                    f"{len(source_snapshot.skipped_oversized_files)} oversized source files.",
-                ]
-                db.commit()
+            db.commit()
     except RepositoryLimitError:
         logger.warning("repository_limit_exceeded", extra={"analysis_run_id": run_id})
         _fail_run(
@@ -286,6 +485,15 @@ def run_structural_analysis(
             run_id,
             "GIT_OPERATION_FAILED",
             "The pinned repository source could not be retrieved.",
+            ["No graph snapshot was published."],
+        )
+    except (CredentialConfigurationError, CredentialDecryptionError):
+        logger.warning("repository_credential_unavailable", extra={"analysis_run_id": run_id})
+        _fail_run(
+            session_factory,
+            run_id,
+            "CREDENTIAL_UNAVAILABLE",
+            "The private repository credential could not be used.",
             ["No graph snapshot was published."],
         )
     except Exception:

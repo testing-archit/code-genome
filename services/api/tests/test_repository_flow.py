@@ -1,5 +1,6 @@
 from code_genome_api.models import AnalysisRun, Membership, Workspace
 from code_genome_api.services.analysis import run_fake_analysis
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -14,7 +15,9 @@ def seed_workspace(factory: sessionmaker[Session], workspace_id: str, user_id: s
         db.commit()
 
 
-def test_repository_and_analysis_lifecycle(client, session_factory: sessionmaker[Session]) -> None:
+def test_repository_and_analysis_lifecycle(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
     seed_workspace(session_factory, "ws_one", "usr_one")
     headers = {**auth("ws_one"), "Idempotency-Key": "register-001"}
     response = client.post(
@@ -52,7 +55,7 @@ def test_repository_and_analysis_lifecycle(client, session_factory: sessionmaker
 
 
 def test_resources_are_hidden_across_workspaces(
-    client, session_factory: sessionmaker[Session]
+    client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seed_workspace(session_factory, "ws_one", "usr_one")
     seed_workspace(session_factory, "ws_two", "usr_two")
@@ -73,7 +76,7 @@ def test_resources_are_hidden_across_workspaces(
 
 
 def test_untrusted_repository_urls_and_refs_are_rejected(
-    client, session_factory: sessionmaker[Session]
+    client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seed_workspace(session_factory, "ws_one", "usr_one")
     response = client.post(
@@ -85,7 +88,9 @@ def test_untrusted_repository_urls_and_refs_are_rejected(
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
-def test_fake_job_records_a_safe_failure(client, session_factory: sessionmaker[Session]) -> None:
+def test_fake_job_records_a_safe_failure(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
     seed_workspace(session_factory, "ws_one", "usr_one")
     repository = client.post(
         "/api/v1/repositories",

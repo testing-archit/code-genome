@@ -32,6 +32,8 @@ The Phase 0 foundation requires Docker Compose. Start the full stack with:
 
 ```bash
 cp .env.example .env
+# Set CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY before connecting a private repository:
+# openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'
 docker compose up --build
 ```
 
@@ -48,7 +50,7 @@ uv run mypy services/api/code_genome_api services/worker/code_genome_worker pack
 uv run pytest
 ```
 
-Structural analysis currently supports public GitHub repositories. It clones a bounded bare repository without checkout, pins the selected branch to commit/tree SHAs, reads only supported JS/TS blobs, and atomically publishes the graph with source-range provenance. Private GitHub App credentials and incremental fetch are the next ingestion checkpoint.
+Structural analysis supports public repositories and private GitHub repositories through a read-only fine-grained PAT or GitHub App installation token. Credentials are AES-256-GCM encrypted with workspace/repository context and are supplied to Git only through an ephemeral askpass helper. Workers maintain locked bare mirrors, fetch branches incrementally, pin commit/tree SHAs, and publish bounded branch, commit, file-manifest, graph, and source-range evidence. Set a deployment-managed encryption key before enabling private access; the development header identity mode is not production authentication.
 
 ## Foundation status
 
@@ -61,6 +63,8 @@ Structural analysis currently supports public GitHub repositories. It clones a b
 - Deterministic Tree-sitter extraction for JS, JSX, TS, and TSX with source-range diagnostics.
 - Stable snapshot-scoped structural graph construction with evidence on every node and edge.
 - Hardened bare-Git reader that pins commit/tree IDs and reads bounded source blobs without checkout.
+- Encrypted private-repository connections with owner/admin RBAC, revocation erasure, and audit events.
+- Incremental worker-only bare mirrors plus branch, commit, and immutable file-manifest evidence.
 
 ## Evidence contract
 

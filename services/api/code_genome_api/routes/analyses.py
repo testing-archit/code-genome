@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Header, status
+from fastapi import APIRouter, BackgroundTasks, Header, Request, status
 from sqlalchemy import select
 
+from ..audit import record_audit_event
 from ..auth import Actor, Database
 from ..errors import AppError
 from ..idempotency import find_idempotent_resource, fingerprint, record_idempotency
@@ -48,6 +49,7 @@ def list_analyses(repository_id: str, db: Database, actor: Actor) -> list[Analys
 async def create_analysis(
     repository_id: str,
     payload: AnalysisCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Database,
     actor: Actor,
@@ -89,6 +91,16 @@ async def create_analysis(
         "analysis_run",
         run.id,
         request_fingerprint,
+    )
+    record_audit_event(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="repository.analysis.queued",
+        resource_type="analysis_run",
+        resource_id=run.id,
+        after_hash=request_fingerprint,
+        request_id=request.state.request_id,
     )
     db.commit()
     db.refresh(run)

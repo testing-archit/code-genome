@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,11 @@ class Settings(BaseSettings):
     max_source_files: int = 10_000
     max_source_file_bytes: int = 1_000_000
     max_source_total_bytes: int = 100_000_000
+    max_manifest_files: int = 100_000
+    max_history_commits: int = 200
+    mirror_root: str = "/tmp/code-genome-mirrors"
+    credential_encryption_key: SecretStr | None = None
+    credential_key_version: str = "local-v1"
 
     @property
     def allowed_origins(self) -> list[str]:

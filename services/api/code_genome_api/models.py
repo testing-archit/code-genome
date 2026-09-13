@@ -50,6 +50,66 @@ class Repository(Base):
     analyses: Mapped[list["AnalysisRun"]] = relationship(back_populates="repository")
 
 
+class RepositoryConnection(Base):
+    __tablename__ = "repository_connections"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "provider", name="uq_repository_connection"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    token_kind: Mapped[str] = mapped_column(String(48))
+    credential_ciphertext: Mapped[str] = mapped_column(Text)
+    credential_nonce: Mapped[str] = mapped_column(String(64))
+    key_version: Mapped[str] = mapped_column(String(80))
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_by: Mapped[str] = mapped_column(String(120))
+    installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BranchRef(Base):
+    __tablename__ = "branch_refs"
+    __table_args__ = (UniqueConstraint("repository_id", "name", name="uq_repository_branch"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    head_sha: Mapped[str] = mapped_column(String(64), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class RepositoryCommit(Base):
+    __tablename__ = "repository_commits"
+    __table_args__ = (UniqueConstraint("repository_id", "sha", name="uq_repository_commit"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    sha: Mapped[str] = mapped_column(String(64), index=True)
+    parent_shas: Mapped[list[str]] = mapped_column(JSON, default=list)
+    author_name: Mapped[str] = mapped_column(String(500))
+    author_email: Mapped[str] = mapped_column(String(500))
+    authored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str] = mapped_column(Text)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
 
@@ -94,6 +154,27 @@ class RepositorySnapshot(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"))
     analysis_version: Mapped[str] = mapped_column(String(160))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FileManifestEntry(Base):
+    __tablename__ = "file_manifest_entries"
+    __table_args__ = (UniqueConstraint("snapshot_id", "path", name="uq_snapshot_file_path"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(String(1000))
+    blob_sha: Mapped[str] = mapped_column(String(64), index=True)
+    mode: Mapped[str] = mapped_column(String(12))
+    size: Mapped[int] = mapped_column(Integer)
+    analyzed: Mapped[bool] = mapped_column(default=False)
 
 
 class Provenance(Base):
@@ -193,4 +274,21 @@ class IdempotencyRecord(Base):
     resource_type: Mapped[str] = mapped_column(String(40))
     resource_id: Mapped[str] = mapped_column(String(32))
     request_fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    actor_id: Mapped[str] = mapped_column(String(120), index=True)
+    action: Mapped[str] = mapped_column(String(120), index=True)
+    resource_type: Mapped[str] = mapped_column(String(80))
+    resource_id: Mapped[str] = mapped_column(String(64), index=True)
+    before_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    after_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str] = mapped_column(String(80), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

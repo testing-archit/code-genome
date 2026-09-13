@@ -40,7 +40,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Idempotency-Key", "X-User-ID", "X-Workspace-ID"],
 )
 app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]

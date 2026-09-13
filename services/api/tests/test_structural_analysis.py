@@ -3,15 +3,19 @@ from pathlib import Path
 
 from code_genome_api.models import (
     AnalysisRun,
+    BranchRef,
+    FileManifestEntry,
     GraphEdge,
     GraphNode,
     Membership,
     Repository,
+    RepositoryCommit,
     RepositorySnapshot,
     Workspace,
 )
 from code_genome_api.services.structural_analysis import run_structural_analysis
-from code_genome_git import GitOperationError, GitRepository
+from code_genome_git import GitCredential, GitOperationError, GitRepository
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -35,8 +39,9 @@ class FixtureCloner:
         *,
         depth: int,
         timeout_seconds: int,
+        credential: GitCredential | None,
     ) -> GitRepository:
-        del clone_url, destination, branch, depth, timeout_seconds
+        del clone_url, destination, branch, depth, timeout_seconds, credential
         return GitRepository(self.git_directory)
 
 
@@ -49,8 +54,9 @@ class FailingCloner:
         *,
         depth: int,
         timeout_seconds: int,
+        credential: GitCredential | None,
     ) -> GitRepository:
-        del clone_url, destination, branch, depth, timeout_seconds
+        del clone_url, destination, branch, depth, timeout_seconds, credential
         raise GitOperationError("fixture clone failure")
 
 
@@ -105,7 +111,7 @@ def seed_analysis(factory: sessionmaker[Session], run_id: str = "run_structural"
 
 
 def test_publishes_and_serves_an_immutable_structural_graph(
-    client, session_factory: sessionmaker[Session], tmp_path: Path
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     bare, expected_sha = create_bare_fixture(tmp_path)
     seed_analysis(session_factory)
@@ -119,6 +125,9 @@ def test_publishes_and_serves_an_immutable_structural_graph(
         assert snapshot is not None and snapshot.published_at is not None
         assert db.scalar(select(func.count()).select_from(GraphNode)) == 3
         assert db.scalar(select(func.count()).select_from(GraphEdge)) == 3
+        assert db.scalar(select(func.count()).select_from(BranchRef)) == 1
+        assert db.scalar(select(func.count()).select_from(RepositoryCommit)) == 1
+        assert db.scalar(select(func.count()).select_from(FileManifestEntry)) == 2
         assert all(
             workspace_id == "ws_structural"
             for workspace_id in db.scalars(select(GraphNode.workspace_id))
@@ -135,6 +144,13 @@ def test_publishes_and_serves_an_immutable_structural_graph(
     evidence = client.get(f"/api/v1/evidence/{evidence_id}", headers=headers)
     assert evidence.status_code == 200
     assert evidence.json()["repository_sha"] == expected_sha
+    inventory = client.get("/api/v1/repositories/repo_structural/inventory", headers=headers)
+    assert inventory.status_code == 200
+    assert inventory.json()["refs"][0]["head_sha"] == expected_sha
+    assert [item["path"] for item in inventory.json()["files"]] == [
+        "src/format.ts",
+        "src/index.ts",
+    ]
 
     seed_analysis(session_factory, "run_repeated")
     run_structural_analysis("run_repeated", session_factory, FixtureCloner(bare))
@@ -162,7 +178,7 @@ def test_clone_failure_publishes_nothing(
 
 
 def test_graph_is_hidden_from_another_workspace(
-    client, session_factory: sessionmaker[Session]
+    client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seed_analysis(session_factory)
     with session_factory() as db:

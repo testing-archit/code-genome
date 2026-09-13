@@ -1,9 +1,13 @@
+import base64
 import os
 from collections.abc import Generator
 
 os.environ["CODE_GENOME_DATABASE_URL"] = "sqlite:///./test_code_genome.db"
 os.environ["CODE_GENOME_JOB_BACKEND"] = "manual"
 os.environ["CODE_GENOME_JOB_DELAY_SECONDS"] = "0"
+os.environ["CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY"] = base64.urlsafe_b64encode(
+    bytes(range(32))
+).decode()
 
 import pytest
 from code_genome_api.database import Base, get_db

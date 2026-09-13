@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 
 from code_genome_git import normalize_github_url, validate_ref
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class WorkspaceCreate(BaseModel):
@@ -147,3 +147,64 @@ class EvidenceResponse(BaseModel):
     end_column: int | None
     extractor_version: str
     observed_at: datetime
+
+
+class CredentialKind(StrEnum):
+    FINE_GRAINED_PAT = "fine_grained_pat"
+    INSTALLATION_TOKEN = "installation_token"
+
+
+class RepositoryConnectionPut(BaseModel):
+    token: SecretStr = Field(min_length=8, max_length=1024)
+    token_kind: CredentialKind = CredentialKind.FINE_GRAINED_PAT
+    scopes: list[str] = Field(default_factory=lambda: ["contents:read"], max_length=20)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, values: list[str]) -> list[str]:
+        normalized = sorted({value.strip().lower() for value in values})
+        if any(not value or len(value) > 80 for value in normalized):
+            raise ValueError("Scopes must be non-empty and at most 80 characters")
+        return normalized
+
+
+class RepositoryConnectionResponse(BaseModel):
+    connected: bool
+    connection_id: str | None
+    provider: str
+    token_kind: CredentialKind | None
+    scopes: list[str]
+    key_version: str | None
+    installed_at: datetime | None
+    revoked_at: datetime | None
+
+
+class BranchRefResponse(BaseModel):
+    name: str
+    head_sha: str
+    observed_at: datetime
+
+
+class CommitResponse(BaseModel):
+    sha: str
+    parent_shas: list[str]
+    author_name: str
+    authored_at: datetime
+    message: str
+
+
+class FileManifestResponse(BaseModel):
+    path: str
+    blob_sha: str
+    mode: str
+    size: int
+    analyzed: bool
+
+
+class RepositoryInventoryResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str | None
+    refs: list[BranchRefResponse]
+    commits: list[CommitResponse]
+    files: list[FileManifestResponse]
+    limitations: list[str]
