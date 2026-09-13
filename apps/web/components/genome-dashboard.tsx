@@ -36,6 +36,14 @@ import {
 import { BranchIcon, HelixMark, PlusIcon } from "./icons";
 
 const terminalStates: AnalysisState[] = ["SUCCEEDED", "FAILED"];
+const sectionIds = [
+  "repositories",
+  "runs",
+  "architecture",
+  "intelligence",
+  "delivery-auditor",
+] as const;
+type SectionId = (typeof sectionIds)[number];
 
 function stateLabel(state: AnalysisState) {
   return state.charAt(0) + state.slice(1).toLowerCase();
@@ -60,6 +68,7 @@ export function GenomeDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<SectionId>("repositories");
 
   const selected = useMemo(
     () => repositories.find((repository) => repository.id === selectedId) ?? null,
@@ -69,6 +78,41 @@ export function GenomeDashboard() {
   const activeGraph = graph?.scope.repository_id === selectedId ? graph : null;
   const activeInventory = inventory?.repository_id === selectedId ? inventory : null;
   const activeArchitecture = architecture?.repository_id === selectedId ? architecture : null;
+
+  useEffect(() => {
+    let frame = 0;
+    const updateActiveSection = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const marker = window.scrollY + Math.min(180, window.innerHeight * 0.3);
+        let current: SectionId = "repositories";
+        for (const id of sectionIds) {
+          const section = document.getElementById(id);
+          if (section && section.getBoundingClientRect().top + window.scrollY <= marker) {
+            current = id;
+          }
+        }
+        setActiveSection(current);
+      });
+    };
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [activeArchitecture, latestRun?.state, selectedId]);
+
+  function navigateToSection(event: React.MouseEvent<HTMLAnchorElement>, id: SectionId) {
+    event.preventDefault();
+    const section = document.getElementById(id);
+    if (!section) return;
+    setActiveSection(id);
+    window.history.replaceState(null, "", `#${id}`);
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   useEffect(() => {
     let active = true;
@@ -198,11 +242,28 @@ export function GenomeDashboard() {
         </a>
 
         <nav aria-label="Primary navigation" className="primary-nav">
-          <a className="nav-item active" href="#repositories"><span>Repository map</span><span className="nav-index">1</span></a>
-          <a className="nav-item" href="#runs"><span>Analysis runs</span><span className="nav-index">2</span></a>
-          <a className="nav-item" href="#architecture"><span>Architecture strata</span><span className="nav-index">3</span></a>
-          <a className="nav-item" href="#intelligence"><span>Change intelligence</span><span className="nav-index">4</span></a>
-          <a className="nav-item" href="#delivery-auditor"><span>Delivery auditor</span><span className="nav-index">5</span></a>
+          {[
+            ["repositories", "Repository map", true],
+            ["runs", "Analysis runs", true],
+            ["architecture", "Architecture strata", Boolean(activeArchitecture)],
+            ["intelligence", "Change intelligence", latestRun?.state === "SUCCEEDED"],
+            ["delivery-auditor", "Delivery auditor", Boolean(selected)],
+          ].map(([id, label, available], index) => (
+            <a
+              aria-current={activeSection === id ? "location" : undefined}
+              aria-disabled={!available}
+              className={`nav-item ${activeSection === id ? "active" : ""} ${available ? "" : "disabled"}`}
+              href={`#${id}`}
+              key={String(id)}
+              onClick={(event) => {
+                if (available) navigateToSection(event, id as SectionId);
+                else event.preventDefault();
+              }}
+              title={available ? String(label) : `${label} is available after analysis`}
+            >
+              <span>{label}</span><span className="nav-index">{index + 1}</span>
+            </a>
+          ))}
         </nav>
 
         <div className="scope-note">
