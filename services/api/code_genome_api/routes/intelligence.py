@@ -222,15 +222,12 @@ def _retrieval_documents(
                 f"Module {module.natural_key}: {module.description}",
             )
         )
-    for hotspot in db.scalars(
-        select(FileHotspot).where(FileHotspot.snapshot_id == snapshot.id)
-    ):
+    for hotspot in db.scalars(select(FileHotspot).where(FileHotspot.snapshot_id == snapshot.id)):
         documents.append(
             RetrievalDocument(
                 f"hotspot:{hotspot.path}",
                 "hotspot",
-                f"File {hotspot.path} is a relative hotspot with "
-                f"{hotspot.commit_count} commits.",
+                f"File {hotspot.path} is a relative hotspot with {hotspot.commit_count} commits.",
             )
         )
     for commit in db.scalars(

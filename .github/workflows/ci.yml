@@ -29,7 +29,11 @@ jobs:
       - run: uv run ruff check services infra packages
       - run: uv run mypy services packages
       - run: uv run pytest
-      - run: CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic upgrade head
+      - name: Verify migration upgrade, rollback, and restore
+        run: |
+          CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic upgrade head
+          CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic downgrade base
+          CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic upgrade head
       - run: uv run pip-audit
 
   web:

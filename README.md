@@ -4,6 +4,8 @@
 
 CODE GENOME ingests a repository, builds a **Software Genome Graph** from code structure, code meaning, and Git evolution, then uses that evidence to reconstruct architecture, generate documentation, estimate risk and change impact, answer repository questions, and verify delivery reports.
 
+All six MVP phases (0–5) are implemented. See [PILOT.md](PILOT.md) for the production launch gates, private-repository checklist, audit reproduction, retention, backup, and revocation drills.
+
 ## Why it exists
 
 Undocumented systems are hard to change safely. Git knows how a system evolved, source code reveals its present structure, and delivery reports make claims about work performed. CODE GENOME joins these facts without presenting guesses as proof.

@@ -1,6 +1,10 @@
+import fcntl
 import hashlib
 import logging
+import os
+import shutil
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -116,6 +120,28 @@ def _mirror_path(root: str, workspace_id: str, repository_id: str) -> Path:
     workspace_key = hashlib.sha256(workspace_id.encode()).hexdigest()[:24]
     repository_key = hashlib.sha256(repository_id.encode()).hexdigest()[:24]
     return Path(root).resolve() / workspace_key / f"{repository_key}.git"
+
+
+def delete_repository_mirror(workspace_id: str, repository_id: str) -> bool:
+    root = Path(get_settings().mirror_root).resolve()
+    target = _mirror_path(str(root), workspace_id, repository_id)
+    if not target.is_relative_to(root) or target.suffix != ".git":
+        raise ValueError("Refusing to delete a mirror outside the configured root")
+    if not target.exists():
+        return False
+    lock_path = target.with_name(f"{target.name}.lock")
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if target.exists():
+            shutil.rmtree(target)
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+    lock_path.unlink(missing_ok=True)
+    with suppress(OSError):
+        target.parent.rmdir()
+    return True
 
 
 def _load_git_credential(

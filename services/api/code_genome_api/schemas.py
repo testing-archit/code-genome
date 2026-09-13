@@ -367,3 +367,14 @@ class AnswerFeedbackResponse(BaseModel):
     answer_id: str
     rating: int
     recorded: bool
+
+
+class RetentionRunCreate(BaseModel):
+    dry_run: bool = True
+
+
+class RetentionRunResponse(BaseModel):
+    cutoff: datetime
+    dry_run: bool
+    delivery_reports: int
+    grounded_answers: int

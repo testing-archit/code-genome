@@ -1,21 +1,16 @@
 {
-  "version": "1.0.0",
-  "generated": "2026-09-13T09:31:53Z",
+  "version": "2.0.0",
+  "generated": "2026-09-13T18:05:00Z",
   "severity_thresholds": {
     "block_merge": "CRITICAL",
     "require_review": "HIGH",
     "inform": "MEDIUM"
   },
   "confidence_threshold": 0.8,
-  "excluded_paths": [
-    "tests/",
-    "docs/",
-    "node_modules/",
-    ".next/"
-  ],
+  "excluded_paths": ["tests/", "node_modules/", ".next/"],
   "tech_stack": [
     "FastAPI",
-    "Pydantic",
+    "PyJWT",
     "SQLAlchemy",
     "PostgreSQL",
     "Redis",

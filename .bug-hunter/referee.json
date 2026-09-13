@@ -1,0 +1,12 @@
+[
+  {
+    "bugId": "SEC-001",
+    "verdict": "REAL_BUG",
+    "trueSeverity": "Critical",
+    "confidenceScore": 99,
+    "confidenceLabel": "high",
+    "verificationMode": "INDEPENDENTLY_VERIFIED",
+    "analysisSummary": "Before Phase 5, protected routes accepted caller-controlled X-User-ID identity. A guessed member and workspace ID enabled remote impersonation. Production now fails closed unless OIDC is configured, and signed issuer/audience-bound JWT subjects drive membership checks.",
+    "suggestedFix": "Implemented in auth.py and config.py; retain the production startup and cryptographic OIDC validation tests."
+  }
+]

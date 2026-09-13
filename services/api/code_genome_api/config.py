@@ -24,6 +24,28 @@ class Settings(BaseSettings):
     mirror_root: str = "/tmp/code-genome-mirrors"
     credential_encryption_key: SecretStr | None = None
     credential_key_version: str = "local-v1"
+    environment: Literal["development", "test", "production"] = "development"
+    auth_mode: Literal["development", "oidc"] = "development"
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+    retention_days: int = 365
+    rate_limit_per_minute: int = 120
+    max_request_bytes: int = 1_000_000
+
+    def validate_runtime(self) -> None:
+        if self.environment == "production" and self.auth_mode != "oidc":
+            raise RuntimeError("Production requires CODE_GENOME_AUTH_MODE=oidc")
+        if self.auth_mode == "oidc" and not all(
+            (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
+        ):
+            raise RuntimeError("OIDC mode requires issuer, audience, and JWKS URL")
+        if not 1 <= self.retention_days <= 3650:
+            raise RuntimeError("Retention days must be between 1 and 3650")
+        if not 10 <= self.rate_limit_per_minute <= 100_000:
+            raise RuntimeError("Rate limit must be between 10 and 100000 requests per minute")
+        if not 100_000 <= self.max_request_bytes <= 10_000_000:
+            raise RuntimeError("Maximum request bytes must be between 100000 and 10000000")
 
     @property
     def allowed_origins(self) -> list[str]:

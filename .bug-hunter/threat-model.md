@@ -1,65 +1,55 @@
 # Threat Model for CODE GENOME
 
-**Generated:** 2026-09-13T09:31:53Z  
-**Version:** 1.0.0 · **Method:** STRIDE
+**Generated:** 2026-09-13T18:05:00Z · **Version:** 2.0.0 · **Method:** STRIDE
 
-## 1. System Overview
+## 1. System
 
-CODE GENOME ingests untrusted GitHub repositories and publishes tenant-scoped structural evidence. Next.js calls FastAPI; PostgreSQL stores tenant/evidence records; Redis/ARQ dispatches workers; bare Git and Tree-sitter process source.
+CODE GENOME ingests untrusted GitHub repositories and produces tenant-scoped analysis/audit evidence. Next.js calls FastAPI; PostgreSQL stores records; Redis/ARQ dispatches workers; bare Git, PyDriller, and Tree-sitter parse without execution.
 
-| Component | Criticality | Entry point |
-|---|---:|---|
-| Web/API | HIGH | `/api/v1/*` |
-| Git worker/credentials | CRITICAL | `analyze_repository` |
-| PostgreSQL | CRITICAL | SQLAlchemy |
-| Redis | HIGH | ARQ queue |
+- **Web/API (HIGH):** `/api/v1/*` tenant UI and evidence APIs.
+- **Git worker (CRITICAL):** ARQ private clone, history, and parsing jobs.
+- **Auditor/intelligence (HIGH):** untrusted text and questions.
+- **PostgreSQL/Redis (CRITICAL):** internal state and jobs.
+
+Flow: browser→API→DB/queue→worker→GitHub/mirror→DB. Pinned IDs and workspace filters return evidence.
 
 ## 2. Trust Boundaries
 
-- **Public:** health route, GitHub responses, repository/report text.
-- **Authenticated:** repository, analysis, graph, evidence, connection routes.
-- **Internal:** API↔database/queue and worker↔GitHub/database/mirror.
+- **Public:** health, GitHub responses, repository/report/question text.
+- **Authenticated:** repository, graph, auditor, chat, retention, and export APIs.
+- **Internal:** API↔PostgreSQL/Redis; worker↔GitHub/mirror.
 
-`X-User-ID` and `X-Workspace-ID` are development-only. Production requires issuer/audience-validated identity tokens.
+Production auth is issuer/audience/signature-validated OIDC JWT plus DB membership. Development headers are rejected in production.
 
-## 3. STRIDE Analysis
+## 3. STRIDE
 
 ### Spoofing
-
-- Forged dev headers can impersonate a member (**CRITICAL**, `auth.py`). Membership checks limit discovery; production OIDC/JWT remains required.
-- Stolen provider secrets grant repository access (**CRITICAL**). Encrypt at rest, prefer short-lived tokens, never return secrets.
+Forged identity headers (**CRITICAL**): production requires OIDC; JWTs require `exp/iat/iss/aud/sub`; membership is checked. IdP configuration/key rotation remain deployment duties.
 
 ### Tampering
-
-- Crafted URL/ref/path can alter Git behavior (**HIGH**, `repository.py`). Require GitHub HTTPS URLs, validated refs, argument arrays, isolated config/hooks, no checkout, and bounded reads.
-- Partial graph writes corrupt a snapshot (**HIGH**, `structural_analysis.py`). Keep commit/tree pins, stable IDs, constraints, and transactional publication.
+Crafted Git input (**HIGH**): GitHub HTTPS allowlist, validated refs, argument arrays, disabled hooks/config, bare mirrors, and bounded deletion paths. Prompt/report injection (**HIGH**): deterministic parsing/extractive retrieval; repository text is never executed or given tools.
 
 ### Repudiation
-
-- Credential and analysis actions need an actor trail (**HIGH**). Append audit events for connect, revoke, and analysis dispatch.
+Credential, analysis, report, answer, retention, and export actions emit actor/request audit events. Production must ship append-only copies outside the application DB.
 
 ### Information Disclosure
-
-- Missing workspace predicates cause cross-tenant IDOR (**CRITICAL**). Scope every lookup and add denial tests; add PostgreSQL RLS before production.
-- Clone URLs, process arguments, and errors can leak tokens (**CRITICAL**). Store credential-free URLs, use ephemeral askpass, and redact errors/logs.
+Cross-tenant IDOR/secret leak (**CRITICAL**): workspace predicates and denial tests, AES-GCM credentials, ephemeral askpass, redacted Git errors. Add PostgreSQL RLS and managed KMS before multi-tenant production.
 
 ### Denial of Service
-
-- Repository/blob/queue exhaustion is **HIGH** risk. Enforce time, output, file and byte caps; deployment must add rate, queue, CPU, memory, and egress limits.
+Request/report/Git time, output, file, byte, and history limits plus per-process throttling exist. Gateway/orchestrator must enforce aggregate rate, queue, CPU, memory, disk, and egress limits.
 
 ### Elevation of Privilege
+Credential, retention, and audit exports require owner/admin; membership gates all protected routes.
 
-- Non-owners could manage credentials (**HIGH**). Centralize role checks and restrict connection mutations to owner/admin roles.
+## 4. Patterns
 
-## 4. Vulnerability Patterns
+- Unsafe `db.get(Resource, id)` from HTTP; safe query includes `workspace_id`.
+- Unsafe `subprocess.run(f"git {input}", shell=True)`; safe validated argument arrays/restricted environment.
+- Unsafe JWT decode without algorithm/issuer/audience; safe JWKS key, fixed algorithms, required claims.
+- Unsafe repository HTML rendering; safe React text nodes and attachment output.
 
-- **IDOR:** `db.get(Repository, id)` → query by both `id` and `workspace_id`.
-- **Command injection:** `run(f"git {input}", shell=True)` → validated argument arrays.
-- **Secret leak:** token in URL/log/database plaintext → encrypted record plus ephemeral askpass.
-- **Auth spoofing:** trust identity headers in production → signed issuer/audience validation.
+## 5. Assumptions
 
-## 5. Assumptions & Accepted Risks
-
-1. Header identity is limited to local/CI use.
-2. Production workers have no host/Docker mounts and restrict resources/egress.
-3. Public HTTPS cloning remains credential-free.
+1. TLS, OIDC login/session creation, KMS, and aggregate limits are deployment controls.
+2. Workers have no host/Docker mounts and use restricted storage/egress.
+3. MVP audit events are in the primary DB; production exports them to immutable storage.

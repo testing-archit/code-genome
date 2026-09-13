@@ -1,0 +1,17 @@
+{
+  "scan_date": "2026-09-13T17:49:34.847Z",
+  "ecosystems": [
+    "node"
+  ],
+  "lockfiles": [
+    "package-lock.json"
+  ],
+  "findings": [],
+  "summary": {
+    "total": 0,
+    "reachable": 0,
+    "potentially_reachable": 0,
+    "not_reachable": 0
+  },
+  "scan_errors": []
+}

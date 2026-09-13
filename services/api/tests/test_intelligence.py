@@ -112,9 +112,7 @@ def test_risk_impact_and_grounded_answers_are_cited_and_tenant_scoped(
 ) -> None:
     with session_factory() as db:
         db.add(Workspace(id="ws_intelligence", name="Intelligence"))
-        db.add(
-            Membership(workspace_id="ws_intelligence", user_id="usr_intelligence", role="owner")
-        )
+        db.add(Membership(workspace_id="ws_intelligence", user_id="usr_intelligence", role="owner"))
         db.add(Workspace(id="ws_intruder", name="Other"))
         db.add(Membership(workspace_id="ws_intruder", user_id="usr_intruder", role="owner"))
         db.commit()
@@ -173,9 +171,7 @@ def test_grounded_answer_refuses_unsupported_question(
 ) -> None:
     with session_factory() as db:
         db.add(Workspace(id="ws_intelligence", name="Intelligence"))
-        db.add(
-            Membership(workspace_id="ws_intelligence", user_id="usr_intelligence", role="owner")
-        )
+        db.add(Membership(workspace_id="ws_intelligence", user_id="usr_intelligence", role="owner"))
         db.commit()
     repository = client.post(
         "/api/v1/repositories",

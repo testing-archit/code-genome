@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Header, Query, Request, Response, status
 from sqlalchemy import select
 
 from ..audit import record_audit_event
@@ -18,6 +18,7 @@ from ..models import (
     RepositorySnapshot,
     utc_now,
 )
+from ..queue import enqueue_mirror_deletion
 from ..schemas import (
     BranchRefResponse,
     CommitResponse,
@@ -261,8 +262,12 @@ def put_repository_connection(
 
 
 @router.delete("/{repository_id}/connection", status_code=status.HTTP_204_NO_CONTENT)
-def revoke_repository_connection(
-    repository_id: str, request: Request, db: Database, actor: Actor
+async def revoke_repository_connection(
+    repository_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Database,
+    actor: Actor,
 ) -> Response:
     _repository_for_actor(db, repository_id, actor)
     _require_connection_admin(actor)
@@ -291,6 +296,7 @@ def revoke_repository_connection(
         request_id=request.state.request_id,
     )
     db.commit()
+    await enqueue_mirror_deletion(actor.workspace_id, repository_id, background_tasks)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

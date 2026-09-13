@@ -18,9 +18,14 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `GET /evidence/{id}` | immutable source provenance locator | `200 Evidence` |
 | `GET /repositories/{id}/impact` | rank impact for file/symbol/change | `200 ImpactResult` |
 | `POST /delivery-reports` | create report + claims | `201 DeliveryReport` |
-| `POST /delivery-reports/{id}/assessments` | queue verification | `202 AnalysisRun` |
+| `POST /delivery-reports/{id}/assessments` | run deterministic verification | `200 DeliveryReport` |
 | `GET /delivery-reports/{id}` | report, claims, assessments | `200 DeliveryReport` |
+| `GET /delivery-reports/{id}/download` | download cited Markdown audit | `200 text/markdown` |
+| `GET /repositories/{id}/risk` | explainable relative risk ranking | `200 RiskResult` |
 | `POST /chat/answers` | grounded Q&A | `200 GroundedAnswer` |
+| `POST /chat/answers/{id}/feedback` | record answer feedback | `200` |
+| `POST /workspaces/{id}/retention/run` | preview/execute report retention | `200` |
+| `GET /workspaces/{id}/audit-events` | audited JSON/CSV export | `200` |
 
 ## Create delivery report
 
@@ -32,7 +37,7 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
     "from": "2026-09-08T00:00:00Z",
     "to": "2026-09-11T23:59:59Z",
     "branches": ["prod", "main"],
-    "include_pull_requests": true,
+    "include_prs": true,
     "include_ci": true,
     "include_deployments": true
   }
@@ -65,7 +70,9 @@ Use RFC 9457 problem JSON: `type`, `title`, `status`, `detail`, `instance`, `req
 - `409 ANALYSIS_IN_PROGRESS` or duplicate idempotency key conflict.
 - `422 UNPROCESSABLE_REPORT`: empty/oversized/unparseable report; preserve user text only per retention policy.
 - `424 EVIDENCE_SOURCE_UNAVAILABLE`: assessment may return partial results with limitation.
-- `429 RATE_LIMITED`; `503 ANALYSIS_DEGRADED`.
+- `413 REQUEST_TOO_LARGE`; `429 RATE_LIMITED`; `503 ANALYSIS_DEGRADED`.
+
+Production bearer tokens are validated against configured JWKS with fixed `RS256`/`ES256` algorithms and required `exp`, `iat`, `iss`, `aud`, and `sub` claims. `X-User-ID` is accepted only in explicit non-production development mode; `X-Workspace-ID` selects a workspace but never bypasses membership.
 
 Use `Idempotency-Key` on all state-changing POSTs. Cursor pagination and maximum graph limits are mandatory.
 

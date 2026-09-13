@@ -383,9 +383,7 @@ class GroundedAnswer(Base):
 
 class AnswerFeedback(Base):
     __tablename__ = "answer_feedback"
-    __table_args__ = (
-        UniqueConstraint("answer_id", "user_id", name="uq_answer_feedback_user"),
-    )
+    __table_args__ = (UniqueConstraint("answer_id", "user_id", name="uq_answer_feedback_user"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(

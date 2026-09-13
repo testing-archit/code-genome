@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from code_genome_intelligence import (
     ImpactRelation,
     RetrievalDocument,
@@ -44,3 +47,14 @@ def test_grounded_answer_refuses_when_no_evidence_matches() -> None:
     assert "invoice export" in grounded.answer
     assert refused.evidence_ids == ()
     assert "Insufficient" in refused.answer
+
+
+def test_reviewed_pilot_labels_beat_the_trivial_constant_baseline() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "risk_labels.json"
+    rows = json.loads(fixture.read_text(encoding="utf-8"))["rows"]
+    result = evaluate_ranking(
+        tuple(row["score"] for row in rows), tuple(row["label"] for row in rows)
+    )
+
+    assert result.useful
+    assert result.model_brier < result.constant_brier

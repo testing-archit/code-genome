@@ -6,6 +6,7 @@ Private source code, GitHub tokens, reports, embeddings, and audit findings are 
 
 ## Required controls
 
+- Production startup requires OIDC mode. API bearer tokens are validated against JWKS with fixed algorithms and required issuer, audience, expiry, issued-at, and subject claims; development identity headers fail closed in production.
 - Prefer GitHub App installation tokens scoped to selected repositories and read-only contents/metadata/PR checks. Rotate and revoke promptly; never log tokens or clone URLs with credentials.
 - Encrypt integration credentials with KMS-managed envelope encryption. Store references, not plaintext, in Postgres.
 - Enforce workspace membership/RBAC and tenant filters at query layer; add row-level security where practical. Test cross-tenant denial.
@@ -15,6 +16,7 @@ Private source code, GitHub tokens, reports, embeddings, and audit findings are 
 - Redact secrets from diffs/logs/chunks before model calls; default to no third-party model egress unless workspace policy permits it.
 - Encrypt in transit and at rest; restrict object-store prefixes by workspace/repository.
 - Maintain append-oriented audit events for credential changes, repository reads, report creation, assessments, exports, overrides, and admin actions.
+- Enforce the built-in request/body limits and per-process throttle, plus an aggregate ingress limit for multi-replica deployments.
 
 ## Retention and deletion
 

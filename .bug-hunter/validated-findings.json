@@ -1,0 +1,11 @@
+[
+  {
+    "bugId": "SEC-001",
+    "reachability": "EXTERNAL",
+    "exploitability": "EASY",
+    "status": "REMEDIATED",
+    "cvss": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L (9.4)",
+    "benignProof": "Before remediation, GET /api/v1/repositories with caller-selected identity and workspace headers authenticated as that member without a signed credential.",
+    "mitigation": "Production requires a JWKS-verified RS256/ES256 JWT with required temporal, issuer, audience, and subject claims; workspace membership remains mandatory."
+  }
+]

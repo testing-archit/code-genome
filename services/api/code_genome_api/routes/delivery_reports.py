@@ -283,8 +283,7 @@ def assess_delivery_report(
                 evidence_ids=evidence_ids,
                 materiality=round(churn / maximum_churn, 4),
                 explanation=(
-                    f"Observed in {len(path_changes)} scoped commit(s) "
-                    "but not cited by a claim."
+                    f"Observed in {len(path_changes)} scoped commit(s) but not cited by a claim."
                 ),
             )
         )

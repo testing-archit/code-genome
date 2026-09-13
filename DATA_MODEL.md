@@ -36,6 +36,14 @@
 | `unreported_change` | report_id, entity/provenance, materiality, explanation, review_state |
 | `audit_event` | workspace_id, actor, action, resource, before/after hashes, request id, timestamp |
 
+## Intelligence
+
+| Entity | Key fields |
+|---|---|
+| `risk_score` | snapshot_id, path, score, feature JSON, rationale, evidence IDs, model version |
+| `grounded_answer` | repository_id, question, extractive answer, evidence IDs, snapshot scope, retrieval version |
+| `answer_feedback` | answer_id, user_id, rating, comment, timestamp |
+
 ## Constraints and indexes
 
 - Every business row has `workspace_id` directly or via an enforced parent relation.
