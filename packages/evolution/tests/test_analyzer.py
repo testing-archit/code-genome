@@ -16,6 +16,7 @@ def test_seeded_cochange_and_inferred_module_documentation_are_stable() -> None:
     assert (strongest.left_path, strongest.right_path) == ("src/a.ts", "src/b.ts")
     assert strongest.commit_count == 2
     assert strongest.confidence == 0.6667
+    assert all(edge.commit_count >= 2 for edge in result.co_changes)
     assert result.hotspots[0].path == "src/a.ts"
     assert all(module.inferred for module in result.modules)
     assert all(module.evidence_shas for module in result.modules)

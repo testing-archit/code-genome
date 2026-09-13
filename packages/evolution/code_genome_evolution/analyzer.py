@@ -27,6 +27,8 @@ def analyze_evolution(
 
     co_changes = []
     for (left, right), shas in pair_commits.items():
+        if len(shas) < 2:
+            continue
         union = len(set(file_commits[left]) | set(file_commits[right]))
         co_changes.append(
             CoChange(left, right, len(shas), round(len(shas) / union, 4), tuple(shas[:20]))
