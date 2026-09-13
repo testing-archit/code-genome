@@ -74,3 +74,41 @@ export type GraphProjection = {
   next_cursor: string | null;
   limitations: string[];
 };
+
+export type Evidence = {
+  id: string;
+  kind: string;
+  repository_sha: string;
+  path: string;
+  start_line: number | null;
+  start_column: number | null;
+  end_line: number | null;
+  end_column: number | null;
+  extractor_version: string;
+  observed_at: string;
+};
+
+export type RepositoryInventory = {
+  repository_id: string;
+  snapshot_sha: string | null;
+  refs: Array<{
+    name: string;
+    head_sha: string;
+    observed_at: string;
+  }>;
+  commits: Array<{
+    sha: string;
+    parent_shas: string[];
+    author_name: string;
+    authored_at: string;
+    message: string;
+  }>;
+  files: Array<{
+    path: string;
+    blob_sha: string;
+    mode: string;
+    size: number;
+    analyzed: boolean;
+  }>;
+  limitations: string[];
+};

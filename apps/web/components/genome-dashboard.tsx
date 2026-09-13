@@ -1,9 +1,25 @@
 "use client";
 
-import type { AnalysisRun, AnalysisState, GraphProjection, Repository } from "@code-genome/contracts";
+import type {
+  AnalysisRun,
+  AnalysisState,
+  Evidence,
+  GraphProjection,
+  Repository,
+  RepositoryInventory,
+} from "@code-genome/contracts";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { createAnalysis, createRepository, getAnalysis, getGraph, listAnalyses, listRepositories } from "../lib/api";
+import {
+  createAnalysis,
+  createRepository,
+  getAnalysis,
+  getEvidence,
+  getGraph,
+  getRepositoryInventory,
+  listAnalyses,
+  listRepositories,
+} from "../lib/api";
 import { BranchIcon, HelixMark, PlusIcon } from "./icons";
 
 const terminalStates: AnalysisState[] = ["SUCCEEDED", "FAILED"];
@@ -25,6 +41,7 @@ export function GenomeDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [graph, setGraph] = useState<GraphProjection | null>(null);
+  const [inventory, setInventory] = useState<RepositoryInventory | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -36,6 +53,7 @@ export function GenomeDashboard() {
   );
   const latestRun = runs[0] ?? null;
   const activeGraph = graph?.scope.repository_id === selectedId ? graph : null;
+  const activeInventory = inventory?.repository_id === selectedId ? inventory : null;
 
   useEffect(() => {
     let active = true;
@@ -86,9 +104,16 @@ export function GenomeDashboard() {
   useEffect(() => {
     if (!selectedId || latestRun?.state !== "SUCCEEDED" || !latestRun.snapshot_sha) return;
     let active = true;
-    void getGraph(selectedId, latestRun.snapshot_sha)
-      .then((projection) => {
-        if (active) setGraph(projection);
+    void Promise.all([
+      getGraph(selectedId, latestRun.snapshot_sha),
+      getRepositoryInventory(selectedId),
+    ])
+      .then(([projection, repositoryInventory]) => {
+        if (active) {
+          setGraph(projection);
+          setInventory(repositoryInventory);
+          setError(null);
+        }
       })
       .catch((caught: unknown) => {
         if (active) {
@@ -117,8 +142,19 @@ export function GenomeDashboard() {
   async function addRepository(cloneUrl: string, branch: string) {
     const repository = await createRepository(cloneUrl, branch);
     setRepositories((current) => [repository, ...current]);
+    setRuns([]);
+    setGraph(null);
+    setInventory(null);
     setSelectedId(repository.id);
     setIsAdding(false);
+  }
+
+  function selectRepository(repositoryId: string) {
+    if (repositoryId === selectedId) return;
+    setRuns([]);
+    setGraph(null);
+    setInventory(null);
+    setSelectedId(repositoryId);
   }
 
   return (
@@ -176,7 +212,7 @@ export function GenomeDashboard() {
                   <button
                     className={`repo-row ${selectedId === repository.id ? "selected" : ""}`}
                     key={repository.id}
-                    onClick={() => setSelectedId(repository.id)}
+                    onClick={() => selectRepository(repository.id)}
                     type="button"
                   >
                     <span className="repo-symbol"><BranchIcon /></span>
@@ -228,7 +264,13 @@ export function GenomeDashboard() {
                   </button>
                 </div>
 
-                {activeGraph && <GraphSummary graph={activeGraph} />}
+                {activeGraph && (
+                  <GraphSummary
+                    graph={activeGraph}
+                    inventory={activeInventory}
+                    key={activeGraph.scope.snapshot_id}
+                  />
+                )}
               </>
             ) : (
               <div className="panel-placeholder"><span>Select a repository to inspect its evidence scope.</span></div>
@@ -258,10 +300,48 @@ export function GenomeDashboard() {
   );
 }
 
-function GraphSummary({ graph }: { graph: GraphProjection }) {
+function GraphSummary({
+  graph,
+  inventory,
+}: {
+  graph: GraphProjection;
+  inventory: RepositoryInventory | null;
+}) {
   const files = graph.nodes.filter((node) => node.kind === "FILE").length;
   const symbols = graph.nodes.filter((node) => node.kind === "SYMBOL").length;
   const imports = graph.edges.filter((edge) => edge.type === "IMPORTS").length;
+  const inspectableNodes = graph.nodes.filter((node) => node.evidence_ids.length > 0);
+  const [selectedNodeId, setSelectedNodeId] = useState(inspectableNodes[0]?.id ?? null);
+  const [evidence, setEvidence] = useState<Evidence | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const selectedNode = inspectableNodes.find((node) => node.id === selectedNodeId) ?? null;
+  const evidenceId = selectedNode?.evidence_ids[0] ?? null;
+
+  useEffect(() => {
+    if (!evidenceId) return;
+    let active = true;
+    void getEvidence(evidenceId)
+      .then((item) => {
+        if (active) setEvidence(item);
+      })
+      .catch((caught: unknown) => {
+        if (active) {
+          setEvidenceError(
+            caught instanceof Error ? caught.message : "Evidence could not be resolved.",
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [evidenceId]);
+
+  function selectNode(nodeId: string) {
+    setSelectedNodeId(nodeId);
+    setEvidence(null);
+    setEvidenceError(null);
+  }
+
   return (
     <div className="graph-summary" aria-label="Published structural graph summary">
       <div className="graph-metrics">
@@ -275,6 +355,84 @@ function GraphSummary({ graph }: { graph: GraphProjection }) {
         <code title={graph.scope.snapshot_sha}>{graph.scope.snapshot_sha.slice(0, 12)}</code>
         <span>{graph.scope.analysis_version}</span>
       </div>
+      <div className="inventory-line" aria-label="Repository ingestion inventory">
+        <span><strong>{inventory?.refs.length ?? "—"}</strong> tracked refs</span>
+        <span><strong>{inventory?.commits.length ?? "—"}</strong> commits observed</span>
+        <span><strong>{inventory?.files.length ?? "—"}</strong> manifest files</span>
+        <span>Read-only bare mirror</span>
+      </div>
+      <section className="evidence-workbench" aria-labelledby="evidence-lens-title">
+        <div className="evidence-index">
+          <div className="lens-heading">
+            <div><span>Graph index</span><h3>Evidence-backed entities</h3></div>
+            <span>{inspectableNodes.length}</span>
+          </div>
+          <div className="evidence-node-list">
+            {inspectableNodes.map((node) => (
+              <button
+                aria-pressed={node.id === selectedNodeId}
+                className={node.id === selectedNodeId ? "active" : ""}
+                key={node.id}
+                onClick={() => selectNode(node.id)}
+                type="button"
+              >
+                <span className={`node-kind node-kind-${node.kind.toLowerCase()}`}>
+                  {node.kind.slice(0, 3)}
+                </span>
+                <span><strong>{nodeTitle(node.natural_key)}</strong><small>{node.natural_key}</small></span>
+                <i>›</i>
+              </button>
+            ))}
+          </div>
+        </div>
+        <aside className="evidence-lens">
+          <div className="lens-heading">
+            <div><span>Evidence lens</span><h3 id="evidence-lens-title">Immutable source locator</h3></div>
+            <span className="verified-mark">Verified</span>
+          </div>
+          {evidenceError ? (
+            <p className="lens-error" role="alert">{evidenceError}</p>
+          ) : evidence?.id === evidenceId ? (
+            <EvidenceDetails evidence={evidence} nodeKind={selectedNode?.kind ?? "ENTITY"} />
+          ) : (
+            <div className="lens-loading"><span />Resolving pinned evidence…</div>
+          )}
+        </aside>
+      </section>
+    </div>
+  );
+}
+
+function nodeTitle(naturalKey: string) {
+  const symbol = naturalKey.split("#")[1];
+  if (symbol) {
+    const [, name] = symbol.split(":");
+    if (name) return name;
+  }
+  const pieces = naturalKey.split(/[/:#]/).filter(Boolean);
+  return pieces.at(-1) ?? naturalKey;
+}
+
+function EvidenceDetails({ evidence, nodeKind }: { evidence: Evidence; nodeKind: string }) {
+  const range = evidence.start_line
+    ? `L${evidence.start_line}${evidence.start_column ? `:${evidence.start_column}` : ""}${
+        evidence.end_line ? `–L${evidence.end_line}${evidence.end_column ? `:${evidence.end_column}` : ""}` : ""
+      }`
+    : "Whole file";
+  return (
+    <div className="evidence-details">
+      <div className="locator-path">
+        <span>{nodeKind} / {evidence.kind.replaceAll("_", " ")}</span>
+        <code title={evidence.path}>{evidence.path}</code>
+      </div>
+      <dl>
+        <div><dt>Source range</dt><dd>{range}</dd></div>
+        <div><dt>Pinned commit</dt><dd><code title={evidence.repository_sha}>{evidence.repository_sha.slice(0, 16)}</code></dd></div>
+        <div><dt>Extractor</dt><dd>{evidence.extractor_version}</dd></div>
+        <div><dt>Observed</dt><dd>{formatTime(evidence.observed_at)}</dd></div>
+      </dl>
+      <div className="evidence-id-line"><span>Evidence ID</span><code>{evidence.id}</code></div>
+      <p>Locator metadata only. Source content stays inside the authorized repository boundary.</p>
     </div>
   );
 }
@@ -304,7 +462,7 @@ function RepositoryDialog({ onClose, onSave }: { onClose: () => void; onSave: (u
         <form onSubmit={submit}>
           <label>GitHub HTTPS URL<input autoFocus onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository" required type="url" value={url} /></label>
           <label>Default branch<input onChange={(event) => setBranch(event.target.value)} required value={branch} /></label>
-          <p className="form-note">Credentials are never accepted in repository URLs. Connecting private access arrives in the ingestion milestone.</p>
+          <p className="form-note">Credentials are never accepted in repository URLs. Owners can attach encrypted private access through the repository connection API.</p>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions"><button className="secondary-action" onClick={onClose} type="button">Cancel</button><button className="primary-action" disabled={saving} type="submit">{saving ? "Registering…" : "Register repository"}</button></div>
         </form>

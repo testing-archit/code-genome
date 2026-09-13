@@ -7,8 +7,12 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | Method/path | Purpose | Success |
 |---|---|---|
 | `POST /repositories` | register approved repo | `201 Repository` |
+| `PUT /repositories/{id}/connection` | encrypt/rotate private GitHub access | `200 RepositoryConnection` |
+| `GET /repositories/{id}/connection` | connection metadata, never the secret | `200 RepositoryConnection` |
+| `DELETE /repositories/{id}/connection` | revoke and erase credential envelope | `204` |
 | `POST /repositories/{id}/analyses` | queue snapshot analysis | `202 AnalysisRun` |
 | `GET /analyses/{id}` | job progress/diagnostics | `200 AnalysisRun` |
+| `GET /repositories/{id}/inventory` | bounded refs, commits, and file manifest | `200 RepositoryInventory` |
 | `GET /repositories/{id}/graph` | filtered snapshot graph | `200 GraphProjection` |
 | `GET /evidence/{id}` | immutable source provenance locator | `200 Evidence` |
 | `GET /repositories/{id}/impact` | rank impact for file/symbol/change | `200 ImpactResult` |
