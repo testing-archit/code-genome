@@ -267,6 +267,77 @@ class ModuleCandidate(Base):
     analysis_version: Mapped[str] = mapped_column(String(160))
 
 
+class DeliveryReport(Base):
+    __tablename__ = "delivery_reports"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    raw_text: Mapped[str] = mapped_column(Text)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    submitted_by: Mapped[str] = mapped_column(String(120))
+    parser_version: Mapped[str] = mapped_column(String(80), default="claims@0.1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DeliveryClaim(Base):
+    __tablename__ = "delivery_claims"
+    __table_args__ = (UniqueConstraint("report_id", "ordinal", name="uq_report_claim_ordinal"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("delivery_reports.id", ondelete="CASCADE"), index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer)
+    original_text: Mapped[str] = mapped_column(Text)
+    start_offset: Mapped[int] = mapped_column(Integer)
+    end_offset: Mapped[int] = mapped_column(Integer)
+    claim_type: Mapped[str] = mapped_column(String(48))
+
+
+class DeliveryAssessment(Base):
+    __tablename__ = "delivery_assessments"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    claim_id: Mapped[str] = mapped_column(
+        ForeignKey("delivery_claims.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(48), index=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    rationale: Mapped[str] = mapped_column(Text)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    limitations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    analysis_version: Mapped[str] = mapped_column(String(80), default="delivery-auditor@0.1.0")
+    assessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class UnreportedChange(Base):
+    __tablename__ = "unreported_changes"
+    __table_args__ = (UniqueConstraint("report_id", "path", name="uq_report_unreported_path"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("delivery_reports.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(String(1000))
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    materiality: Mapped[float] = mapped_column(Float)
+    explanation: Mapped[str] = mapped_column(Text)
+
+
 class Provenance(Base):
     __tablename__ = "provenance"
 
