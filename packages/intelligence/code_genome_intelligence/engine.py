@@ -13,10 +13,16 @@ from .types import (
 
 TOKEN = re.compile(r"[a-zA-Z0-9_-]{3,}")
 STOP = {"and", "the", "for", "from", "that", "this", "what", "where", "which", "with"}
+RECENCY_TERMS = {"latest", "newest", "recent", "recently"}
+CHANGE_TERMS = {"change", "changed", "changes", "commit", "commits", "update", "updates"}
 
 
 def _tokens(value: str) -> set[str]:
     return {token.lower() for token in TOKEN.findall(value) if token.lower() not in STOP}
+
+
+def _asks_for_recent_changes(terms: set[str]) -> bool:
+    return bool(terms & RECENCY_TERMS) and bool(terms & CHANGE_TERMS)
 
 
 def score_risks(items: tuple[RiskInput, ...]) -> tuple[RiskResult, ...]:
@@ -77,15 +83,21 @@ def answer_question(
     question: str, documents: tuple[RetrievalDocument, ...], *, limit: int = 5
 ) -> GroundedResult:
     question_terms = _tokens(question)
+    recent_changes = _asks_for_recent_changes(question_terms)
+    if recent_changes:
+        selected = [document for document in documents if document.kind == "commit"][:limit]
+    else:
+        selected = []
     ranked: list[tuple[float, RetrievalDocument]] = []
-    for document in documents:
-        terms = _tokens(document.text)
-        overlap = question_terms & terms
-        score = len(overlap) / max(1, len(question_terms))
-        if score:
-            ranked.append((score, document))
-    ranked.sort(key=lambda item: (-item[0], item[1].id))
-    selected = [document for _, document in ranked[:limit]]
+    if not recent_changes:
+        for document in documents:
+            terms = _tokens(document.text)
+            overlap = question_terms & terms
+            score = len(overlap) / max(1, len(question_terms))
+            if score:
+                ranked.append((score, document))
+        ranked.sort(key=lambda item: (-item[0], item[1].id))
+        selected = [document for _, document in ranked[:limit]]
     if not selected:
         return GroundedResult(
             "Insufficient repository evidence to answer this question.",

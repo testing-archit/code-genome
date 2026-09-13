@@ -49,6 +49,21 @@ def test_grounded_answer_refuses_when_no_evidence_matches() -> None:
     assert "Insufficient" in refused.answer
 
 
+def test_grounded_answer_uses_newest_commits_for_recent_change_questions() -> None:
+    documents = (
+        RetrievalDocument("module:billing", "module", "Billing and invoice workflows."),
+        RetrievalDocument("commit:newest", "commit", "harden repository credentials"),
+        RetrievalDocument("commit:next", "commit", "add delivery report downloads"),
+        RetrievalDocument("commit:older", "commit", "build architecture projection"),
+    )
+
+    grounded = answer_question("What were the latest changes about?", documents, limit=2)
+
+    assert grounded.evidence_ids == ("commit:newest", "commit:next")
+    assert "harden repository credentials" in grounded.answer
+    assert "build architecture projection" not in grounded.answer
+
+
 def test_reviewed_pilot_labels_beat_the_trivial_constant_baseline() -> None:
     fixture = Path(__file__).parent / "fixtures" / "risk_labels.json"
     rows = json.loads(fixture.read_text(encoding="utf-8"))["rows"]

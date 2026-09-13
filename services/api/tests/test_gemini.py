@@ -52,6 +52,10 @@ def test_gemini_answer_is_limited_to_retrieved_evidence(monkeypatch: pytest.Monk
     assert "gemini-2.5-flash:generateContent" in observed["url"]
     prompt = observed["body"]["contents"][0]["parts"][0]["text"]
     assert "<module:billing>" in prompt
+    assert "Never infer implementation details" in prompt
+    assert observed["body"]["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+    citation_schema = observed["body"]["generationConfig"]["responseSchema"]["properties"]
+    assert citation_schema["cited_evidence_ids"]["items"]["enum"] == ["module:billing"]
 
 
 def test_gemini_rejects_citations_outside_retrieved_context(
