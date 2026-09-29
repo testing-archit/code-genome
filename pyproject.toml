@@ -17,10 +17,14 @@ dependencies = [
   "PyJWT[crypto]>=2.10,<3",
   "pydantic-settings>=2.10,<3",
   "sqlalchemy>=2.0,<3",
-  "tree-sitter>=0.25,<0.27",
+  "tree-sitter>=0.25,<0.26",  # 0.26.0 segfaults on node access after a few files
   "tree-sitter-javascript>=0.25,<0.26",
   "tree-sitter-typescript>=0.23,<0.24",
   "uvicorn[standard]>=0.35,<1",
+  "numpy>=2.1,<3",
+  "scipy>=1.14,<2",
+  "scikit-learn>=1.6,<2",
+  "networkx>=3.4,<4",
 ]
 
 [project.optional-dependencies]
@@ -34,13 +38,13 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git", "packages/intelligence"]
+where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git", "packages/intelligence", "packages/ml"]
 include = ["code_genome_*"]
 namespaces = false
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
-testpaths = ["services/api/tests", "services/worker/tests", "packages/analyzers/tests", "packages/delivery-auditor/tests", "packages/evolution/tests", "packages/genome/tests", "packages/git/tests", "packages/intelligence/tests"]
+testpaths = ["services/api/tests", "services/worker/tests", "packages/analyzers/tests", "packages/delivery-auditor/tests", "packages/evolution/tests", "packages/genome/tests", "packages/git/tests", "packages/intelligence/tests", "packages/ml/tests"]
 
 [tool.ruff]
 line-length = 100
@@ -53,3 +57,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "scipy.*", "networkx.*"]
+ignore_missing_imports = true

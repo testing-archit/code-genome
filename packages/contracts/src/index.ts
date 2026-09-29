@@ -219,8 +219,203 @@ export type GroundedAnswer = {
   question: string;
   answer: string;
   evidence_ids: string[];
-  scope: Record<string, string>;
+  scope: {
+    snapshot_id?: string;
+    snapshot_sha?: string;
+    analysis_version?: string;
+    channel?: "text" | "voice";
+    language?: AnswerLanguage;
+    search_query?: string;
+  };
   limitations: string[];
   retrieval_version: string;
   created_at: string;
+};
+
+export type AnswerLanguage = "auto" | "en" | "hi" | "hinglish";
+
+export type ConversationMessage = {
+  id: string;
+  role: "user" | "assistant";
+  channel: "text" | "voice";
+  content: string;
+  created_at: string;
+  answer: GroundedAnswer | null;
+};
+
+export type ConversationSummary = {
+  id: string;
+  repository_id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Conversation = ConversationSummary & { messages: ConversationMessage[] };
+
+export type ConversationTurn = {
+  conversation: ConversationSummary;
+  user_message: ConversationMessage;
+  assistant_message: ConversationMessage;
+};
+
+export type VoiceName = "Kore" | "Puck" | "Charon" | "Aoede" | "Fenrir" | "Leda" | "Orus" | "Zephyr";
+
+export type VoiceSession = {
+  id: string;
+  repository_id: string;
+  snapshot_sha: string;
+  model: string;
+  voice: VoiceName;
+  language: AnswerLanguage;
+  websocket_url: string;
+  token: string;
+  expires_at: string;
+  new_session_expires_at: string;
+  setup: Record<string, unknown>;
+  limitations: string[];
+};
+
+export type RepositoryConnection = {
+  connected: boolean;
+  connection_id: string | null;
+  provider: string;
+  token_kind: "fine_grained_pat" | "installation_token" | null;
+  scopes: string[];
+  key_version: string | null;
+  installed_at: string | null;
+  revoked_at: string | null;
+};
+
+export type AuditEventRecord = {
+  id: string;
+  actor_id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  before_hash: string | null;
+  after_hash: string | null;
+  request_id: string;
+  created_at: string;
+};
+
+export type MlStatus = "trained" | "insufficient_data";
+
+type Scores = { roc_auc: number; average_precision: number; precision_at_top20pct?: number; recall_at_top20pct?: number; brier?: number };
+
+export type IntentResult = {
+  model_version: string;
+  status: MlStatus;
+  dataset: { seed_version: string; seed_examples: number; weak_labels: number; class_counts: Record<string, number>; predicted_commits: number };
+  metrics: {
+    cv_folds: number;
+    cv_accuracy: number;
+    cv_macro_f1: number;
+    majority_baseline_macro_f1: number;
+    per_class_f1: Record<string, number>;
+    confusion_matrix: { labels: string[]; matrix: number[][] };
+    repository_holdout?: { examples: number; accuracy: number; macro_f1: number };
+  };
+  predictions: Array<{ sha: string; intent: string; probability: number; source: "conventional" | "model" }>;
+  top_terms: Record<string, string[]>;
+  training_seconds: number;
+};
+
+export type DefectResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  dataset: Record<string, unknown> & { train_positive?: number; train_negative?: number; test_positive?: number; test_negative?: number; train_period?: string[]; test_period?: string[]; bulk_commits_excluded?: number };
+  metrics: { heuristic_baseline?: Scores; logistic_regression?: Scores; gradient_boosting?: Scores; test_base_rate?: number; note?: string };
+  champion: "logistic_regression" | "gradient_boosting" | null;
+  importance: Array<[string, number]>;
+  calibration: { predicted?: number[]; observed?: number[] };
+  predictions: Array<{ path: string; probability: number; band: "high" | "medium" | "low"; contributions: Array<[string, number]>; features: Record<string, number>; evidence_shas: string[] }>;
+  feature_labels: Record<string, string>;
+  training_seconds: number;
+};
+
+export type LinkResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  dataset: Record<string, unknown>;
+  metrics: { model?: Scores; baseline_past_cochange?: { roc_auc: number }; baseline_import_distance?: { roc_auc: number }; test_pairs?: number; test_base_rate?: number; note?: string };
+  coefficients: number[];
+  feature_labels: Record<string, string>;
+  training_seconds: number;
+};
+
+export type RetrievalResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  metrics: {
+    status: string;
+    queries: number;
+    documents?: number;
+    k?: number;
+    bm25?: { mrr: number; recall_at_10: number };
+    semantic?: { mrr: number; recall_at_10: number };
+    hybrid?: { mrr: number; recall_at_10: number };
+    random_baseline_recall?: number;
+    selected_mode?: "hybrid" | "bm25" | "semantic";
+  };
+  training_seconds: number;
+};
+
+export type ModulesResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  metrics: { communities?: number; clustered_files?: number; isolated_files?: number; modularity_learned?: number; modularity_directory_baseline?: number; directory_groups?: number };
+  modules: Array<{ name: string; files: string[]; cohesion: number; keywords: string[] }>;
+  training_seconds: number;
+};
+
+export type AnomalyResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  metrics: { commits?: number; flagged?: number; contamination?: number };
+  anomalies: Array<{ sha: string; score: number; reasons: string[] }>;
+  training_seconds: number;
+};
+
+type Task<T> = { task: string; model_version: string; status: MlStatus; trained_at: string; result: T };
+
+export type MlOverview = {
+  repository_id: string;
+  snapshot_sha: string;
+  trained: boolean;
+  tasks: Partial<{
+    commit_intent: Task<IntentResult>;
+    defect_risk: Task<DefectResult>;
+    change_impact: Task<LinkResult>;
+    retrieval: Task<RetrievalResult>;
+    modules: Task<ModulesResult>;
+    anomalies: Task<AnomalyResult>;
+  }>;
+  limitations: string[];
+};
+
+export type SearchResults = {
+  query: string;
+  snapshot_sha: string;
+  model_version: string;
+  hits: Array<{
+    id: string;
+    kind: "file" | "module" | "hotspot" | "commit";
+    title: string;
+    path: string | null;
+    score: number;
+    bm25: number;
+    semantic: number;
+    bm25_rank: number | null;
+    semantic_rank: number | null;
+    match: "keyword and semantic" | "keyword" | "semantic (inferred)";
+  }>;
+  message: string | null;
+  limitations: string[];
 };

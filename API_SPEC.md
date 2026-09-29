@@ -22,7 +22,17 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `GET /delivery-reports/{id}` | report, claims, assessments | `200 DeliveryReport` |
 | `GET /delivery-reports/{id}/download` | download cited Markdown audit | `200 text/markdown` |
 | `GET /repositories/{id}/risk` | explainable relative risk ranking | `200 RiskResult` |
-| `POST /chat/answers` | grounded Q&A | `200 GroundedAnswer` |
+| `GET /delivery-reports?repository_id=` | list checked reports for a repository | `200 DeliveryReport[]` |
+| `POST /chat/answers` | grounded Q&A (`language`: `auto`/`en`/`hi`/`hinglish`, `channel`: `text`/`voice`) | `200 GroundedAnswer` |
+| `GET /repositories/{id}/conversations` | caller's conversations for a repository | `200 ConversationSummary[]` |
+| `POST /repositories/{id}/conversations` | start a conversation | `201 ConversationSummary` |
+| `GET /conversations/{id}` | messages, each assistant turn with its cited answer | `200 Conversation` |
+| `POST /conversations/{id}/messages` | ask a follow-up; history resolves references only | `201 ConversationTurn` |
+| `DELETE /conversations/{id}` | delete a conversation (answers stay audited) | `204` |
+| `POST /voice/sessions` | mint a single-use Gemini Live token with locked setup | `201 VoiceSession` |
+| `GET /repositories/{id}/ml` | trained models, evaluations, and outputs for the latest snapshot | `200 MlOverview` |
+| `POST /repositories/{id}/ml/train` | retrain all snapshot models (replaces prior runs atomically) | `200 MlOverview` |
+| `GET /repositories/{id}/search?q=&kind=` | ranked search with the repository's selected retrieval mode | `200 SearchResults` |
 | `POST /chat/answers/{id}/feedback` | record answer feedback | `200` |
 | `POST /workspaces/{id}/retention/run` | preview/execute report retention | `200` |
 | `GET /workspaces/{id}/audit-events` | audited JSON/CSV export | `200` |

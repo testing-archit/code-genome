@@ -54,6 +54,7 @@ from .credentials import (
     CredentialDecryptionError,
     EncryptedCredential,
 )
+from .ml import train_snapshot_models
 
 SessionFactory = Callable[[], Session]
 logger = logging.getLogger(__name__)
@@ -426,6 +427,24 @@ def _persist_graph(
     return snapshot
 
 
+def _train_models(
+    session_factory: SessionFactory, workspace_id: str, repository_id: str, commit_sha: str
+) -> None:
+    """Train the snapshot's ML models. Best effort: a failure never fails the analysis."""
+    try:
+        with session_factory() as db:
+            snapshot = _published_snapshot(db, workspace_id, repository_id, commit_sha)
+            if snapshot is None:
+                return
+            train_snapshot_models(db, snapshot, "system:worker")
+            db.commit()
+    except Exception:  # noqa: BLE001 - model training must not break publication
+        logger.exception(
+            "ml_training_failed",
+            extra={"repository_id": repository_id, "commit_sha": commit_sha},
+        )
+
+
 def run_structural_analysis(
     run_id: str,
     session_factory: SessionFactory = SessionLocal,
@@ -578,6 +597,7 @@ def run_structural_analysis(
                 f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
             ]
             db.commit()
+        _train_models(session_factory, workspace_id, repository_id, source_snapshot.commit_sha)
     except RepositoryLimitError:
         logger.warning("repository_limit_exceeded", extra={"analysis_run_id": run_id})
         _fail_run(

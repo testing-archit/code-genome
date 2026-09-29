@@ -1,20 +1,12 @@
-import logging
+from typing import Any
 
-from code_genome_intelligence import (
-    ImpactRelation,
-    RetrievalDocument,
-    RiskInput,
-    answer_question,
-    rank_impact,
-    score_risks,
-)
+from code_genome_intelligence import ImpactRelation, RiskInput, rank_impact, score_risks
+from code_genome_ml import predict_impact
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from ..audit import record_audit_event
 from ..auth import Actor, Database
-from ..config import get_settings
 from ..errors import AppError
 from ..ids import new_id
 from ..models import (
@@ -24,9 +16,7 @@ from ..models import (
     GraphEdge,
     GraphNode,
     GroundedAnswer,
-    ModuleCandidate,
     Repository,
-    RepositoryCommit,
     RepositorySnapshot,
     RiskScore,
 )
@@ -40,10 +30,67 @@ from ..schemas import (
     RiskResponse,
     RiskScoreResponse,
 )
-from ..services.gemini import GeminiProviderError, generate_grounded_answer
+from ..services import ml
+from ..services.grounding import produce_grounded_answer
 
 router = APIRouter(tags=["intelligence"])
-logger = logging.getLogger(__name__)
+
+
+def grounded_answer_response(answer: GroundedAnswer) -> GroundedAnswerResponse:
+    return GroundedAnswerResponse(
+        id=answer.id,
+        repository_id=answer.repository_id,
+        question=answer.question,
+        answer=answer.answer,
+        evidence_ids=answer.evidence_ids,
+        scope=answer.scope_json,
+        limitations=answer.limitations,
+        retrieval_version=answer.retrieval_version,
+        created_at=answer.created_at,
+    )
+
+
+def _learned_risk(repository_id: str, snapshot_sha: str, learned: dict[str, Any]) -> RiskResponse:
+    labels: dict[str, str] = learned.get("feature_labels", {})
+    champion = learned.get("champion") or "logistic_regression"
+    metrics = learned.get("metrics", {}).get(champion, {})
+    scores = []
+    for item in learned.get("predictions", []):
+        contributions = item.get("contributions", [])
+        factors = ", ".join(
+            f"{labels.get(name, name)} ({'+' if value >= 0 else ''}{value:.2f})"
+            for name, value in contributions[:3]
+        )
+        scores.append(
+            RiskScoreResponse(
+                path=item["path"],
+                score=item["probability"],
+                features={labels.get(name, name): value for name, value in contributions},
+                rationale=(
+                    f"{item['band'].capitalize()} predicted defect-proneness "
+                    f"(p={item['probability']:.2f}). Strongest factors: {factors}."
+                ),
+                evidence_ids=[f"commit:{sha}" for sha in item.get("evidence_shas", [])],
+                model_version=f"{learned['model_version']}:{champion}",
+            )
+        )
+    evaluation = (
+        f"Held-out evaluation on the latest period: ROC-AUC {metrics['roc_auc']:.2f}, "
+        f"average precision {metrics['average_precision']:.2f}."
+        if "roc_auc" in metrics
+        else "No held-out evaluation was possible for the latest period."
+    )
+    return RiskResponse(
+        repository_id=repository_id,
+        snapshot_sha=snapshot_sha,
+        scores=scores,
+        limitations=[
+            "Probabilities estimate whether a bug-fix commit will touch the file, learned from "
+            "this repository's history; they are not proof of a defect.",
+            evaluation,
+            "Factor values are logistic-regression contributions to the log-odds.",
+        ],
+    )
 
 
 def _repository(db: Database, repository_id: str, actor: Actor) -> Repository:
@@ -78,6 +125,9 @@ def _snapshot(db: Database, repository_id: str, actor: Actor) -> RepositorySnaps
 def get_risk(repository_id: str, db: Database, actor: Actor) -> RiskResponse:
     _repository(db, repository_id, actor)
     snapshot = _snapshot(db, repository_id, actor)
+    learned = ml.trained_result(db, snapshot, "defect_risk")
+    if learned is not None:
+        return _learned_risk(repository_id, snapshot.commit_sha, learned)
     stored = list(
         db.scalars(
             select(RiskScore)
@@ -193,56 +243,55 @@ def get_impact(
                 )
             )
     results = rank_impact(path, tuple(relations))
+    impacted = {
+        item.path: ImpactItemResponse(
+            path=item.path,
+            score=item.score,
+            reasons=list(item.reasons),
+            evidence_ids=list(item.evidence_ids),
+        )
+        for item in results
+    }
+    limitations = [
+        "Impact is a one-hop traversal of observed imports and repeated co-change.",
+        "Absence from this result does not establish absence of runtime impact.",
+    ]
+    link_model = ml.trained_result(db, snapshot, "change_impact")
+    if link_model is not None:
+        inputs = ml.training_inputs(db, snapshot)
+        predictions = predict_impact(
+            link_model,
+            path,
+            inputs.changes,
+            inputs.imports,
+            [record.path for record in inputs.files],
+        )
+        for prediction in predictions:
+            reason = f"model predicts co-change p={prediction.probability:.2f} (inferred" + (
+                f"; {', '.join(prediction.reasons)})" if prediction.reasons else ")"
+            )
+            existing = impacted.get(prediction.path)
+            if existing:
+                existing.reasons.append(reason)
+                existing.score = round(max(existing.score, prediction.probability), 4)
+            elif prediction.probability >= 0.2:
+                impacted[prediction.path] = ImpactItemResponse(
+                    path=prediction.path,
+                    score=prediction.probability,
+                    reasons=[reason],
+                    evidence_ids=[],
+                )
+        limitations.append(
+            f"Model-predicted items come from {link_model['model_version']}, trained on this "
+            "repository's co-change history; they are inferred and carry no direct evidence."
+        )
     return ImpactResponse(
         repository_id=repository_id,
         snapshot_sha=snapshot.commit_sha,
         selected_path=path,
-        impacted=[
-            ImpactItemResponse(
-                path=item.path,
-                score=item.score,
-                reasons=list(item.reasons),
-                evidence_ids=list(item.evidence_ids),
-            )
-            for item in results
-        ],
-        limitations=[
-            "Impact is a one-hop traversal of observed imports and repeated co-change.",
-            "Absence from this result does not establish absence of runtime impact.",
-        ],
+        impacted=sorted(impacted.values(), key=lambda item: (-item.score, item.path))[:25],
+        limitations=limitations,
     )
-
-
-def _retrieval_documents(
-    db: Database, repository_id: str, snapshot: RepositorySnapshot
-) -> tuple[RetrievalDocument, ...]:
-    documents: list[RetrievalDocument] = []
-    for module in db.scalars(
-        select(ModuleCandidate).where(ModuleCandidate.snapshot_id == snapshot.id)
-    ):
-        documents.append(
-            RetrievalDocument(
-                f"module:{module.id}",
-                "module",
-                f"Module {module.natural_key}: {module.description}",
-            )
-        )
-    for hotspot in db.scalars(select(FileHotspot).where(FileHotspot.snapshot_id == snapshot.id)):
-        documents.append(
-            RetrievalDocument(
-                f"hotspot:{hotspot.path}",
-                "hotspot",
-                f"File {hotspot.path} is a relative hotspot with {hotspot.commit_count} commits.",
-            )
-        )
-    for commit in db.scalars(
-        select(RepositoryCommit)
-        .where(RepositoryCommit.repository_id == repository_id)
-        .order_by(RepositoryCommit.authored_at.desc())
-        .limit(200)
-    ):
-        documents.append(RetrievalDocument(f"commit:{commit.sha}", "commit", commit.message))
-    return tuple(documents)
 
 
 @router.post("/chat/answers", response_model=GroundedAnswerResponse)
@@ -251,64 +300,20 @@ def create_grounded_answer(
 ) -> GroundedAnswerResponse:
     _repository(db, payload.repository_id, actor)
     snapshot = _snapshot(db, payload.repository_id, actor)
-    documents = _retrieval_documents(db, payload.repository_id, snapshot)
-    result = answer_question(payload.question, documents)
-    retrieval_version = "lexical-grounding@0.1.0"
-    settings = get_settings()
-    api_key = settings.gemini_api_key
-    if result.evidence_ids and api_key is not None and api_key.get_secret_value():
-        selected_ids = set(result.evidence_ids)
-        selected = tuple(document for document in documents if document.id in selected_ids)
-        try:
-            result = generate_grounded_answer(
-                api_key=api_key.get_secret_value(),
-                model=settings.gemini_model,
-                question=payload.question,
-                documents=selected,
-                timeout_seconds=settings.gemini_timeout_seconds,
-                max_output_tokens=settings.gemini_max_output_tokens,
-            )
-            retrieval_version = f"lexical+gemini:{settings.gemini_model}"
-        except GeminiProviderError:
-            logger.warning(
-                "gemini_grounded_answer_fallback",
-                extra={"repository_id": payload.repository_id, "snapshot_id": snapshot.id},
-            )
-    answer = GroundedAnswer(
-        id=new_id("ans"),
-        workspace_id=actor.workspace_id,
-        repository_id=payload.repository_id,
-        question=payload.question,
-        answer=result.answer,
-        evidence_ids=list(result.evidence_ids),
-        scope_json={"snapshot_id": snapshot.id, "snapshot_sha": snapshot.commit_sha},
-        limitations=list(result.limitations),
-        retrieval_version=retrieval_version,
-        created_by=actor.user_id,
-    )
-    db.add(answer)
-    record_audit_event(
+    answer = produce_grounded_answer(
         db,
         workspace_id=actor.workspace_id,
-        actor_id=actor.user_id,
-        action="grounded_answer.created",
-        resource_type="grounded_answer",
-        resource_id=answer.id,
+        user_id=actor.user_id,
+        repository_id=payload.repository_id,
+        snapshot=snapshot,
+        question=payload.question,
         request_id=request.state.request_id,
+        channel=payload.channel,
+        language=payload.language,
     )
     db.commit()
     db.refresh(answer)
-    return GroundedAnswerResponse(
-        id=answer.id,
-        repository_id=answer.repository_id,
-        question=answer.question,
-        answer=answer.answer,
-        evidence_ids=answer.evidence_ids,
-        scope=answer.scope_json,
-        limitations=answer.limitations,
-        retrieval_version=answer.retrieval_version,
-        created_at=answer.created_at,
-    )
+    return grounded_answer_response(answer)
 
 
 @router.post("/chat/answers/{answer_id}/feedback", response_model=AnswerFeedbackResponse)

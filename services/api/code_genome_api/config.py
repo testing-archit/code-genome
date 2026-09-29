@@ -37,9 +37,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GEMINI_API_KEY", "CODE_GENOME_GEMINI_API_KEY"),
     )
     gemini_model: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3.8-flash",
         validation_alias=AliasChoices("GEMINI_MODEL", "CODE_GENOME_GEMINI_MODEL"),
     )
+    gemini_live_model: str = Field(
+        default="gemini-3.8-live",
+        validation_alias=AliasChoices("GEMINI_LIVE_MODEL", "CODE_GENOME_GEMINI_LIVE_MODEL"),
+    )
+    gemini_live_session_minutes: int = 15
     gemini_timeout_seconds: float = 20
     gemini_max_output_tokens: int = 700
 
@@ -58,6 +63,8 @@ class Settings(BaseSettings):
             raise RuntimeError("Maximum request bytes must be between 100000 and 10000000")
         if not 1 <= self.gemini_timeout_seconds <= 60:
             raise RuntimeError("Gemini timeout must be between 1 and 60 seconds")
+        if not 2 <= self.gemini_live_session_minutes <= 30:
+            raise RuntimeError("Gemini Live sessions must last between 2 and 30 minutes")
         if not 128 <= self.gemini_max_output_tokens <= 4096:
             raise RuntimeError("Gemini output tokens must be between 128 and 4096")
 

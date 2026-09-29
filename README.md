@@ -17,6 +17,16 @@ The four product engines are:
 3. **Impact Engine** — likely affected files/modules before a proposed change.
 4. **Delivery Auditor** — compares natural-language delivery claims with commits, diffs, PRs, CI, and deployment evidence.
 
+## Features
+
+- **Repository genome**: files drawn as chromosome-style bands by module and hotspot; interactive dependency graph; file explorer with risk and impact per file; commit history with activity, authors, and ML intent labels.
+- **Trained models** (`packages/ml`): commit-intent classification, temporal defect-proneness prediction, change-impact link prediction, hybrid BM25 + LSA retrieval, Louvain module discovery, and isolation-forest unusual-commit detection. Every model is evaluated on held-out data against a baseline and shown on the **Models** page. See [ML_SPEC.md](ML_SPEC.md).
+- **Chat**: multi-turn conversations whose answers cite the modules, files, hotspots, and commits they used. English, Hindi, and Hinglish, with dictation and read-aloud.
+- **Voice agent**: Gemini 3.8 Live over a single-use ephemeral token (the API key never reaches the browser). The model must call the repository evidence tool before answering, and speaks English, Hindi, or Hinglish.
+- **Search**, **delivery audit** with history, **private repository access**, **activity log**, command palette (⌘K), and light/dark themes.
+
+Chat phrasing and voice use Gemini when `GEMINI_API_KEY` is set (`GEMINI_MODEL`, default `gemini-3.8-flash`; `GEMINI_LIVE_MODEL`, default `gemini-3.8-live`). Without a key, chat answers stay extractive and voice is unavailable; the models and search are unaffected.
+
 ## MVP scope
 
 - JavaScript and TypeScript repositories only.
@@ -48,7 +58,7 @@ npm install
 uv sync --extra dev
 npm run lint && npm run typecheck && npm run build
 uv run ruff check services infra packages
-uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome packages/git/code_genome_git
+uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome packages/git/code_genome_git packages/ml/code_genome_ml
 uv run pytest
 ```
 

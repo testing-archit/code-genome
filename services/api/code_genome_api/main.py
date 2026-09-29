@@ -15,12 +15,15 @@ from .rate_limit import FixedWindowLimiter
 from .routes import (
     analyses,
     architecture,
+    conversations,
     delivery_reports,
     graph,
     health,
     intelligence,
+    ml,
     operations,
     repositories,
+    voice,
     workspaces,
 )
 
@@ -126,3 +129,6 @@ app.include_router(architecture.router, prefix="/api/v1")
 app.include_router(delivery_reports.router, prefix="/api/v1")
 app.include_router(intelligence.router, prefix="/api/v1")
 app.include_router(operations.router, prefix="/api/v1")
+app.include_router(conversations.router, prefix="/api/v1")
+app.include_router(voice.router, prefix="/api/v1")
+app.include_router(ml.router, prefix="/api/v1")

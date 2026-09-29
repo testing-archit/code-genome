@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from git.exc import GitCommandError
 from pydriller import Repository as PyDrillerRepository  # type: ignore[import-untyped]
 
 from .types import CommitChange
@@ -20,7 +21,13 @@ def mine_commit_changes(
     for commit in repository.traverse_commits():
         files: list[str] = []
         churn = 0
-        for modified in commit.modified_files:
+        try:
+            modified_files = commit.modified_files
+        except GitCommandError:
+            # The oldest commits of a shallow mirror have parents outside the fetched
+            # history, so their diff cannot be computed. Skip them rather than fail.
+            continue
+        for modified in modified_files:
             path = modified.new_path or modified.old_path
             if path and len(path) <= 1_000:
                 files.append(path)

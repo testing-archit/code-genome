@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from code_genome_git import normalize_github_url, validate_ref
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
@@ -341,9 +341,14 @@ class ImpactResponse(BaseModel):
     limitations: list[str]
 
 
+AnswerLanguage = Literal["auto", "en", "hi", "hinglish"]
+
+
 class GroundedAnswerCreate(BaseModel):
     repository_id: str = Field(min_length=1, max_length=32)
-    question: str = Field(min_length=3, max_length=2000)
+    question: str = Field(min_length=2, max_length=2000)
+    channel: Literal["text", "voice"] = "text"
+    language: AnswerLanguage = "auto"
 
 
 class GroundedAnswerResponse(BaseModel):
@@ -378,3 +383,100 @@ class RetentionRunResponse(BaseModel):
     dry_run: bool
     delivery_reports: int
     grounded_answers: int
+
+
+class ConversationCreate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class ConversationMessageCreate(BaseModel):
+    content: str = Field(min_length=2, max_length=2000)
+    channel: Literal["text", "voice"] = "text"
+    language: AnswerLanguage = "auto"
+
+
+class ConversationMessageResponse(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    channel: str
+    content: str
+    created_at: datetime
+    answer: GroundedAnswerResponse | None = None
+
+
+class ConversationSummaryResponse(BaseModel):
+    id: str
+    repository_id: str
+    title: str
+    message_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationResponse(ConversationSummaryResponse):
+    messages: list[ConversationMessageResponse]
+
+
+class ConversationTurnResponse(BaseModel):
+    conversation: ConversationSummaryResponse
+    user_message: ConversationMessageResponse
+    assistant_message: ConversationMessageResponse
+
+
+class VoiceSessionCreate(BaseModel):
+    repository_id: str = Field(min_length=1, max_length=32)
+    voice: Literal["Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr"] = "Kore"
+    language: AnswerLanguage = "auto"
+
+
+class VoiceSessionResponse(BaseModel):
+    id: str
+    repository_id: str
+    snapshot_sha: str
+    model: str
+    voice: str
+    language: str
+    websocket_url: str
+    token: str
+    expires_at: datetime
+    new_session_expires_at: datetime
+    setup: dict[str, Any]
+    limitations: list[str]
+
+
+class MlTaskResponse(BaseModel):
+    task: str
+    model_version: str
+    status: str
+    trained_at: datetime
+    result: dict[str, Any]
+
+
+class MlOverviewResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    trained: bool
+    tasks: dict[str, MlTaskResponse]
+    limitations: list[str]
+
+
+class SearchHitResponse(BaseModel):
+    id: str
+    kind: str
+    title: str
+    path: str | None
+    score: float
+    bm25: float
+    semantic: float
+    bm25_rank: int | None
+    semantic_rank: int | None
+    match: Literal["keyword and semantic", "keyword", "semantic (inferred)"]
+
+
+class SearchResponse(BaseModel):
+    query: str
+    snapshot_sha: str
+    model_version: str
+    hits: list[SearchHitResponse]
+    message: str | None
+    limitations: list[str]

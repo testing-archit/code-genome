@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from code_genome_delivery_auditor import EvidenceCandidate, assess_claim, parse_claims
-from fastapi import APIRouter, Header, Request, Response, status
+from fastapi import APIRouter, Header, Query, Request, Response, status
 from sqlalchemy import select
 
 from ..audit import record_audit_event
@@ -298,6 +298,25 @@ def assess_delivery_report(
     )
     db.commit()
     return _serialize_report(db, report)
+
+
+@router.get("", response_model=list[DeliveryReportResponse])
+def list_delivery_reports(
+    db: Database,
+    actor: Actor,
+    repository_id: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[DeliveryReportResponse]:
+    reports = db.scalars(
+        select(DeliveryReport)
+        .where(
+            DeliveryReport.workspace_id == actor.workspace_id,
+            DeliveryReport.repository_id == repository_id,
+        )
+        .order_by(DeliveryReport.created_at.desc())
+        .limit(limit)
+    )
+    return [_serialize_report(db, report) for report in reports]
 
 
 @router.get("/{report_id}", response_model=DeliveryReportResponse)

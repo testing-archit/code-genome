@@ -27,14 +27,22 @@ SYMBOL_TYPES: dict[str, Literal["function", "class", "method", "interface", "typ
 FUNCTION_VALUES = {"arrow_function", "function_expression", "generator_function"}
 
 
+# Grammars are loaded once per process rather than once per file.
+_LANGUAGES: dict[LanguageName, Language] = {
+    "javascript": Language(tree_sitter_javascript.language()),
+    "tsx": Language(tree_sitter_typescript.language_tsx()),
+    "typescript": Language(tree_sitter_typescript.language_typescript()),
+}
+
+
 def _language_for_path(path: str) -> tuple[LanguageName, Language]:
     suffix = PurePosixPath(path).suffix.lower()
     if suffix in {".js", ".jsx", ".mjs", ".cjs"}:
-        return "javascript", Language(tree_sitter_javascript.language())
+        return "javascript", _LANGUAGES["javascript"]
     if suffix == ".tsx":
-        return "tsx", Language(tree_sitter_typescript.language_tsx())
+        return "tsx", _LANGUAGES["tsx"]
     if suffix in {".ts", ".mts", ".cts"}:
-        return "typescript", Language(tree_sitter_typescript.language_typescript())
+        return "typescript", _LANGUAGES["typescript"]
     raise ValueError(f"Unsupported JavaScript/TypeScript file extension: {suffix or '<none>'}")
 
 
