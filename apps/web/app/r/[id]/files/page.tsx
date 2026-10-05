@@ -1,6 +1,7 @@
 "use client";
 
 import type { RepositoryInventory } from "@code-genome/contracts";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
@@ -8,7 +9,7 @@ import { FileIcon, FilesIcon } from "../../../../components/icons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Meter, Notice, Panel, SearchField } from "../../../../components/ui";
 import { api } from "../../../../lib/api";
-import { formatBytes, shortSha } from "../../../../lib/format";
+import { formatBytes, relativeTime, shortSha } from "../../../../lib/format";
 import { useResource } from "../../../../lib/use-resource";
 
 type FileEntry = RepositoryInventory["files"][number];
@@ -133,7 +134,7 @@ function FilesView() {
   if (inventory.error) return <Notice tone="error" title="Files could not be loaded">{inventory.error}</Notice>;
 
   return (
-    <div className="split" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.1fr)" }}>
+    <div className="split" style={{ "--split-columns": "minmax(0, 1fr) minmax(0, 1.1fr)" } as React.CSSProperties}>
       <Panel
         title="Files"
         description={inventory.data ? `${inventory.data.files.length} in the manifest, ${inventory.data.files.filter((f) => f.analyzed).length} analyzed` : undefined}
@@ -169,6 +170,11 @@ function FileDetail({ path }: { path: string }) {
   const sha = published?.snapshot_sha ?? "";
   const risk = useResource(`${repository.id}:risk:${sha}`, () => api.getRisk(repository.id));
   const impact = useResource(`${repository.id}:impact:${sha}:${path}`, () => api.getImpact(repository.id, path));
+  const analyzed = inventory.data?.files.find((item) => item.path === path)?.analyzed ?? false;
+  // The genome's focus view always includes the focused file with its code metrics.
+  const genome = useResource(analyzed ? `${repository.id}:file-metrics:${sha}:${path}` : null, () => api.getGenome(repository.id, path, 10));
+  const bugs = useResource(`${repository.id}:bugs:${sha}:${path}`, () => api.getBugs(repository.id, path, 20));
+  const metrics = genome.data?.nodes.find((node) => node.id === `file:${path}`)?.properties as { loc?: number | null; complexity?: number | null; functions?: number | null } | undefined;
   const file = inventory.data?.files.find((item) => item.path === path) ?? null;
   const owningModule = architecture.data?.modules.find((item) => item.file_paths.includes(path)) ?? null;
   const hotspot = architecture.data?.hotspots.find((item) => item.path === path) ?? null;
@@ -189,7 +195,19 @@ function FileDetail({ path }: { path: string }) {
           <dt>Analyzed</dt><dd>{file?.analyzed ? "Yes, structure extracted" : "No, outside JS/TS scope or limits"}</dd>
           <dt>Module</dt><dd>{owningModule ? <>{owningModule.name} <span className="muted">({Math.round(owningModule.confidence * 100)}% confidence, inferred)</span></> : "None inferred"}</dd>
           <dt>History</dt><dd>{hotspot ? `${hotspot.commit_count} commits, ${hotspot.churn} lines churned` : "No hotspot history recorded"}</dd>
+          {analyzed && (
+            <>
+              <dt>Code metrics</dt>
+              <dd>
+                {genome.loading ? <span className="muted">Loading…</span> : genome.error ? <span className="muted">Unavailable: {genome.error}</span> : metrics && metrics.loc != null ? (
+                  <>{metrics.loc.toLocaleString()} lines of code · complexity {metrics.complexity ?? "—"} · {metrics.functions ?? 0} functions</>
+                ) : <span className="muted">Not recorded for this snapshot. Re-analyze to compute them.</span>}
+              </dd>
+            </>
+          )}
         </dl>
+
+        <Link className="button button-secondary" href={`/r/${repository.id}/ask?q=${encodeURIComponent(`Why is ${path} risky?`)}`} style={{ justifySelf: "start" }}>Why is this risky?</Link>
 
         <div>
           <h3 style={{ marginBottom: 8 }}>Change risk</h3>
@@ -220,6 +238,24 @@ function FileDetail({ path }: { path: string }) {
               ))}
             </div>
           ) : <p className="muted small">No one-hop import or repeated co-change was observed. That does not rule out runtime impact.</p>}
+        </div>
+
+        <div>
+          <h3 style={{ marginBottom: 8 }}>Bug history <span className="badge badge-warn">heuristic</span></h3>
+          {bugs.loading ? <div className="skeleton" style={{ height: 40 }} /> : bugs.error ? <Notice tone="error">{bugs.error}</Notice> : bugs.data && bugs.data.fixes.length > 0 ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              <p className="small">
+                Touched by {bugs.data.counts.fix_commits} fix commit{bugs.data.counts.fix_commits === 1 ? "" : "s"}, with {bugs.data.counts.bug_links} candidate bug-introducing link{bugs.data.counts.bug_links === 1 ? "" : "s"} (SZZ-lite candidates, not proof).
+              </p>
+              {bugs.data.fixes.slice(0, 3).map((fix) => (
+                <div className="small" key={fix.fix_sha}>
+                  <span className="badge badge-ok">fix</span> {fix.subject ?? shortSha(fix.fix_sha, 8)}{" "}
+                  <span className="muted">{fix.authored_at ? relativeTime(fix.authored_at) : ""}{fix.introducing.length ? ` · likely from ${fix.introducing.slice(0, 2).map((item) => shortSha(item.introducing_sha, 7)).join(", ")}` : ""}</span>
+                </div>
+              ))}
+              <Link className="small" href={`/r/${repository.id}/bugs?path=${encodeURIComponent(path)}`}>Full bug history for this file</Link>
+            </div>
+          ) : <p className="muted small">No supporting evidence was identified in the selected scope.</p>}
         </div>
 
         {pairs.length > 0 && (

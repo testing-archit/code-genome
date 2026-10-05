@@ -1,10 +1,13 @@
 "use client";
 
+import type { EvolutionTimeline, MlOverviewWithInstability, TimelinePoint } from "@code-genome/contracts";
 import { useMemo, useState } from "react";
 
 import { RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Notice, Panel, SearchField } from "../../../../components/ui";
+import { api } from "../../../../lib/api";
 import { formatDate, formatTime, localDayKey, parseTime, relativeTime, shortSha } from "../../../../lib/format";
+import { useResource } from "../../../../lib/use-resource";
 
 export default function HistoryPage() {
   return (
@@ -94,6 +97,8 @@ function HistoryView() {
         </Panel>
       </div>
 
+      <ComponentLanes />
+
       {intentCounts.length > 0 && (
         <div className="chip-row" role="group" aria-label="Filter by commit intent">
           <button aria-pressed={intentFilter === null} className="suggestion" onClick={() => setIntentFilter(null)} type="button">All intents</button>
@@ -141,5 +146,135 @@ function HistoryView() {
         )}
       </Panel>
     </>
+  );
+}
+
+const LANES = 10;
+
+function ComponentLanes() {
+  const { repository, published, models } = useRepo();
+  const [bucket, setBucket] = useState<"week" | "month">("week");
+  const [showAll, setShowAll] = useState(false);
+  const sha = published?.snapshot_sha ?? "";
+  const timeline = useResource(`${repository.id}:timeline:${sha}:${bucket}`, () => api.getTimeline(repository.id, bucket));
+  const forecast = useMemo(() => {
+    const instability = (models.data as MlOverviewWithInstability | null)?.tasks.instability?.result;
+    return new Map((instability?.status === "trained" ? instability.predictions : []).map((item) => [item.component, item]));
+  }, [models.data]);
+
+  const view = useMemo(() => (timeline.data ? lanes(timeline.data, bucket === "week" ? 26 : 18) : null), [timeline.data, bucket]);
+
+  const toggle = (
+    <div aria-label="Bucket size" className="segmented" role="group">
+      <button aria-pressed={bucket === "week"} onClick={() => setBucket("week")} type="button">Weekly</button>
+      <button aria-pressed={bucket === "month"} onClick={() => setBucket("month")} type="button">Monthly</button>
+    </div>
+  );
+
+  return (
+    <Panel
+      title="Component evolution"
+      description="Churn per component over time, with bug-fix commits and candidate bug-introducing commits (SZZ-lite) marked. Shows when a module turned into a hotspot."
+      actions={toggle}
+    >
+      {timeline.error ? (
+        <Notice tone="error" title="The component timeline could not be loaded">{timeline.error}</Notice>
+      ) : !view ? (
+        <Loading rows={5} height={28} />
+      ) : view.components.length === 0 ? (
+        <Empty title="No component history">No supporting evidence was identified in the selected scope.</Empty>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          <div className="legend">
+            <span><i style={{ "--swatch": "var(--hema)" } as React.CSSProperties} />churn (lines changed)</span>
+            <span><i style={{ "--swatch": "var(--eosin)" } as React.CSSProperties} />bug-fix commits</span>
+            <span><i style={{ "--swatch": "var(--warn)" } as React.CSSProperties} />candidate bug-introducing commits (heuristic)</span>
+          </div>
+          <div className="lanes" role="table" aria-label={`Churn per component per ${bucket}`}>
+            <Lane label="Whole repository" points={view.overall} peak={view.peakOverall} buckets={view.buckets} />
+            {(showAll ? view.components : view.components.slice(0, LANES)).map((component) => {
+              const prediction = forecast.get(component.name);
+              return (
+                <Lane
+                  buckets={view.buckets}
+                  key={component.name}
+                  label={component.name}
+                  peak={view.peak}
+                  points={component.points}
+                  role={component.role}
+                  badge={prediction ? (
+                    <span
+                      className={`badge ${prediction.band === "high" ? "badge-bad" : prediction.band === "medium" ? "badge-warn" : ""}`}
+                      title="Inferred forecast from the instability model: probability that the next period contains a bug fix"
+                    >
+                      {Math.round(prediction.probability * 100)}% next-period fix risk
+                    </span>
+                  ) : null}
+                />
+              );
+            })}
+          </div>
+          <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+            {view.components.length > LANES && (
+              <button className="button button-secondary" onClick={() => setShowAll((value) => !value)} type="button">
+                {showAll ? "Show top components" : `Show all ${view.components.length} components`}
+              </button>
+            )}
+            <span className="muted small">
+              {view.buckets.length} {bucket}s from {view.buckets[0]} (UTC). Forecast badges come from the instability model on the Models page{forecast.size ? "" : ", which is not trained for this snapshot"}.
+            </span>
+          </div>
+          {timeline.data?.limitations.map((item) => <p className="muted small" key={item}>{item}</p>)}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function lanes(data: EvolutionTimeline, keep: number) {
+  const buckets = data.buckets.slice(-keep);
+  const pick = (points: TimelinePoint[]) => {
+    const byBucket = new Map(points.map((point) => [point.bucket_start, point]));
+    return buckets.map((start) => byBucket.get(start) ?? { bucket_start: start, commits: 0, churn: 0, fix_commits: 0, authors: 0, bug_introducing_commits: 0 });
+  };
+  const components = data.components
+    .map((component) => ({ ...component, points: pick(component.points) }))
+    .filter((component) => component.points.some((point) => point.commits > 0))
+    .sort((a, b) => b.points.reduce((sum, point) => sum + point.churn, 0) - a.points.reduce((sum, point) => sum + point.churn, 0));
+  const overall = pick(data.overall);
+  return {
+    buckets,
+    overall,
+    components,
+    peak: Math.max(1, ...components.flatMap((component) => component.points.map((point) => point.churn))),
+    peakOverall: Math.max(1, ...overall.map((point) => point.churn)),
+  };
+}
+
+function Lane({ label, role, points, peak, buckets, badge }: { label: string; role?: string; points: TimelinePoint[]; peak: number; buckets: string[]; badge?: React.ReactNode }) {
+  return (
+    <div className="lane" role="row">
+      <div className="lane-label" role="rowheader">
+        <code className="truncate" title={label}>{label}</code>
+        <div className="chip-row">
+          {role && role !== "unknown" && <span className="badge">{role}</span>}
+          {badge}
+        </div>
+      </div>
+      <div className="lane-cells" style={{ gridTemplateColumns: `repeat(${buckets.length}, minmax(0, 1fr))` }}>
+        {points.map((point) => (
+          <div
+            className="lane-cell"
+            key={point.bucket_start}
+            role="cell"
+            title={`${point.bucket_start}: ${point.commits} commits, ${point.churn} lines churned, ${point.fix_commits} fixes, ${point.bug_introducing_commits} candidate bug-introducing, ${point.authors} authors`}
+          >
+            <i style={{ height: `${point.churn ? Math.max(6, Math.sqrt(point.churn / peak) * 100) : 0}%` }} />
+            {point.fix_commits > 0 && <b className="lane-fix" />}
+            {point.bug_introducing_commits > 0 && <b className="lane-intro" />}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

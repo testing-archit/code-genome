@@ -8,6 +8,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { api, errorMessage } from "../lib/api";
 import { formatTime, repoName, shortSha } from "../lib/format";
 import { invalidate, Resource, useResource } from "../lib/use-resource";
+import { AnalysisProgress } from "./analysis-progress";
 import { CloseIcon, HelixMark } from "./icons";
 import { sectionFor, TopBar } from "./shell";
 import { Empty, Notice } from "./ui";
@@ -241,7 +242,7 @@ export function RequiresSnapshot({ children, what }: { children: React.ReactNode
         title={running ? "Analysis in progress" : "No published snapshot yet"}
         action={
           running ? (
-            <div className="progress" style={{ width: 220 }}><i style={{ width: `${Math.max(4, (latestRun?.progress ?? 0) * 100)}%` }} /></div>
+            latestRun ? <div style={{ width: "min(560px, 100%)", textAlign: "left" }}><AnalysisProgress compact run={latestRun} /></div> : null
           ) : (
             <button className="button button-primary" disabled={starting} onClick={() => void startAnalysis()} type="button">
               {starting ? "Queuing…" : "Analyze repository"}

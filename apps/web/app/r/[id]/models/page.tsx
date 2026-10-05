@@ -5,6 +5,8 @@ import type {
   ClusterAlgorithm,
   ClusterScores,
   DefectChampion,
+  DefectResultV3,
+  DefectScoresV3,
   MlOverviewV3,
   RankingApproach,
 } from "@code-genome/contracts";
@@ -242,6 +244,7 @@ function DefectSection({ overview }: { overview: MlOverviewV3 }) {
                 />
               ) : <Notice>{result.metrics.note}</Notice>}
               {result.metrics.decision_rule && <p className="muted small">{result.metrics.decision_rule}</p>}
+              {result.metrics.szz_labels && <SzzLabelComparison report={result.metrics.szz_labels} />}
             </div>
             <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
               <DefectFeatures features={result.dataset.features} codeMetrics={result.dataset.code_metrics} labels={labels} />
@@ -450,10 +453,16 @@ function InstabilitySection({ overview }: { overview: MlOverviewV3 }) {
   const weekly = dataset.period_kind === "week";
   const period = weekly ? "week" : `window of ${dataset.period_size ?? "?"} commits`;
   const labels = result.feature_labels;
+  const gruChampion = result.champion === "gru";
+  const gru = metrics.gru && "average_precision" in metrics.gru ? metrics.gru : null;
   return (
     <Panel
       title="Component instability forecast"
-      description={`Which components (directories) will a bug-fix commit touch next ${weekly ? "week" : "period"}? A logistic regression reads each component's last ${dataset.window ?? 4} periods of commits, fixes, churn, and authors: a windowed sequence model, not a recurrent network. Forecasts are inferred, not findings.`}
+      description={`Which components (directories) will a bug-fix commit touch next ${weekly ? "week" : "period"}? ${
+        gruChampion
+          ? `A GRU recurrent network (PyTorch) reads each component's last ${dataset.window ?? 4} periods of commits, fixes, churn, and authors; it beat the windowed logistic regression on held-out periods.`
+          : `A logistic regression reads each component's last ${dataset.window ?? 4} periods of commits, fixes, churn, and authors: a windowed sequence model.${gru ? " A GRU recurrent network was also tested on the same periods and did not beat it." : ""}`
+      } Forecasts are inferred, not findings.`}
     >
       {task.status !== "trained" ? <Abstained reason={result.reason} /> : (
         <div className="grid-2">
@@ -463,17 +472,24 @@ function InstabilitySection({ overview }: { overview: MlOverviewV3 }) {
               <MetricBars
                 caption={`One period is a ${period}; ${dataset.periods} periods, ${dataset.components} components. Scored on ${dataset.test_samples} component-periods${dataset.test_period?.[0] ? ` from ${formatDate(dataset.test_period[0])} on` : ""} (base rate ${(metrics.test_base_rate ?? 0).toFixed(2)}), never seen in training. Persistence predicts that the next period repeats this one.`}
                 groups={[
-                  { label: "ROC-AUC", values: { baseline: metrics.baseline_persistence?.roc_auc, challenger: metrics.baseline_historical_rate?.roc_auc, model: metrics.model.roc_auc } },
-                  { label: "Average precision", values: { baseline: metrics.baseline_persistence?.average_precision, challenger: metrics.baseline_historical_rate?.average_precision, model: metrics.model.average_precision } },
-                  { label: "F1", values: { baseline: metrics.baseline_persistence?.f1, challenger: metrics.baseline_historical_rate?.f1, model: metrics.model.f1 } },
+                  { label: "ROC-AUC", values: { baseline: metrics.baseline_persistence?.roc_auc, challenger: metrics.baseline_historical_rate?.roc_auc, model: metrics.model.roc_auc, forest: gru?.roc_auc } },
+                  { label: "Average precision", values: { baseline: metrics.baseline_persistence?.average_precision, challenger: metrics.baseline_historical_rate?.average_precision, model: metrics.model.average_precision, forest: gru?.average_precision } },
+                  { label: "F1", values: { baseline: metrics.baseline_persistence?.f1, challenger: metrics.baseline_historical_rate?.f1, model: metrics.model.f1, forest: gru?.f1 } },
                 ]}
-                series={[{ ...baselineSeries, label: "Persistence" }, { ...challengerSeries, label: "Historical fix rate" }, { ...modelSeries, label: "Windowed model" }]}
+                series={[
+                  { ...baselineSeries, label: "Persistence" },
+                  { ...challengerSeries, label: "Historical fix rate" },
+                  { ...modelSeries, label: "Windowed logistic regression" },
+                  ...(gru ? [{ ...forestSeries, label: "GRU (PyTorch)" }] : []),
+                ]}
               />
             ) : <Notice>{metrics.note}</Notice>}
+            {metrics.gru && !gru && <p className="muted small">GRU challenger not run: {"reason" in metrics.gru ? metrics.gru.reason : "unavailable"}</p>}
+            {metrics.champion_rule && <p className="muted small">{metrics.champion_rule} Deployed: {gruChampion ? "GRU" : "logistic regression"}.</p>}
           </div>
           <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
             <h3>Most likely to need a fix next {weekly ? "week" : "period"}</h3>
-            <p className="muted small">Bars show commits in each of the last {dataset.window ?? 4} periods (fixes in red). Factors are log-odds contributions.</p>
+            <p className="muted small">Bars show commits in each of the last {dataset.window ?? 4} periods (fixes in red). Factors: {gruChampion ? "probability change when each feature is reset to its median (GRU)" : "log-odds contributions (logistic regression)"}.</p>
             <div className="list" style={{ margin: "0 -20px" }}>
               {result.predictions.slice(0, 6).map((item) => (
                 <div className="list-row" key={item.component} style={{ alignItems: "flex-start" }}>
@@ -792,5 +808,44 @@ function ImpactRankingSection({ overview }: { overview: MlOverviewV3 }) {
         </>
       )}
     </Panel>
+  );
+}
+
+function SzzLabelComparison({ report }: { report: NonNullable<DefectResultV3["metrics"]["szz_labels"]> }) {
+  const rows: Array<[string, DefectScoresV3 | undefined]> = [
+    ["Heuristic baseline", report.heuristic_baseline],
+    ["Logistic regression", report.logistic_regression],
+    ["Random forest", report.random_forest],
+    ["Gradient boosting", report.gradient_boosting],
+  ];
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <h3>Alternative label: bug introduced (SZZ-lite)</h3>
+      <p className="muted small">
+        The same models scored on a different question: did a candidate bug-introducing commit touch the file? ({report.links_used} of {report.links_supplied} links used; {report.train_positive} positive files in training, {report.test_positive} in test.) This is a comparison only. The deployed model keeps the fix-touch label, and the two labels define different ground truth, so their scores are not directly comparable.
+      </p>
+      {report.status !== "evaluated" ? (
+        <Notice>{report.reason ?? "Not enough labelled files to evaluate."}</Notice>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th scope="col">Model</th><th scope="col">ROC-AUC</th><th scope="col">Avg. precision</th><th scope="col">F1</th></tr></thead>
+            <tbody>
+              {rows.filter(([, scores]) => scores).map(([name, scores]) => (
+                <tr key={name}>
+                  <td>{name}</td>
+                  <td>{scores?.roc_auc?.toFixed(2) ?? "—"}</td>
+                  <td>{scores?.average_precision?.toFixed(2) ?? "—"}</td>
+                  <td>{scores?.f1?.toFixed(2) ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {report.test_positive < 10 && report.status === "evaluated" && (
+        <p className="muted small">Few positive files in the test period, so these scores are noisy.</p>
+      )}
+    </div>
   );
 }

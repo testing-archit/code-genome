@@ -1,12 +1,13 @@
 "use client";
 
-import type { RepositoryOverview } from "@code-genome/contracts";
+import type { AnalysisRunWithProgress, RepositoryOverview } from "@code-genome/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
 
 import { ComponentMap } from "../../../components/component-map";
 import { buildBands, GenomeStrip } from "../../../components/genome-strip";
+import { AnalysisProgress } from "../../../components/analysis-progress";
 import { EvidenceChips, useRepo } from "../../../components/repo-context";
 import { Empty, Loading, Meter, Notice, Panel } from "../../../components/ui";
 import { api } from "../../../lib/api";
@@ -402,8 +403,8 @@ function AnalysisStatus({ prominent = false }: { prominent?: boolean }) {
         </div>
       )}
       {running && (
-        <div className="progress" style={{ marginTop: 14 }} aria-label="Analysis progress">
-          <i style={{ width: `${Math.max(4, latestRun.progress * 100)}%` }} />
+        <div style={{ marginTop: 14 }}>
+          <AnalysisProgress run={latestRun} />
         </div>
       )}
       {latestRun?.state === "FAILED" && (
@@ -414,6 +415,7 @@ function AnalysisStatus({ prominent = false }: { prominent?: boolean }) {
               ? <>If the repository is private, <Link href={`/r/${repository.id}/settings`}>add a read-only token</Link>.</>
               : null}
           </Notice>
+          {(latestRun as AnalysisRunWithProgress).stage && <div style={{ marginTop: 12 }}><AnalysisProgress run={latestRun} /></div>}
         </div>
       )}
       {latestRun && latestRun.diagnostics.length > 0 && latestRun.state === "SUCCEEDED" && (

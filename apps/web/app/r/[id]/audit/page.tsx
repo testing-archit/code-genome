@@ -114,7 +114,7 @@ export default function AuditPage() {
   }, {});
 
   return (
-    <div className="split" style={{ gridTemplateColumns: "minmax(0, 0.9fr) minmax(0, 1.3fr)" }}>
+    <div className="split" style={{ "--split-columns": "minmax(0, 0.9fr) minmax(0, 1.3fr)" } as React.CSSProperties}>
       <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
         <Panel title="Check a delivery report" description="Paste a status update. Each claim is matched against commits and diffs in the date range.">
           <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>

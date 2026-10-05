@@ -61,3 +61,5 @@ export const DiffIcon = (p: IconProps) => <Icon {...p}><path d="M7 4v10M2 9h10M5
 export const CompareIcon = (p: IconProps) => <Icon {...p}><rect height="14" rx="1.5" width="6" x="3" y="5" /><rect height="14" rx="1.5" width="6" x="15" y="5" /><path d="M10.5 9h3M12.5 7.5 14 9l-1.5 1.5M13.5 15h-3M11.5 13.5 10 15l1.5 1.5" /></Icon>;
 export const DocIcon = (p: IconProps) => <Icon {...p}><path d="M7 3.5h7l4 4V20.5H7z" /><path d="M14 3.5v4h4M10 12h5M10 15.5h5" /></Icon>;
 export const HotspotIcon = (p: IconProps) => <Icon {...p}><circle cx="12" cy="12" r="2.5" /><circle cx="12" cy="12" r="6" /><path d="M12 3v2M12 19v2M3 12h2M19 12h2" /></Icon>;
+export const GenomeIcon = (p: IconProps) => <Icon {...p}><path d="M7 3c0 6 10 6 10 12s-10 6-10 6M17 3c0 6-10 6-10 12" /><path d="M9 7h6M8.5 17h7" /></Icon>;
+export const BugIcon = (p: IconProps) => <Icon {...p}><rect height="11" rx="5" width="8" x="8" y="8" /><path d="M12 8V5.5M9.5 5.5 8 4M14.5 5.5 16 4M4 12h4M16 12h4M4.5 17.5 8 16M19.5 17.5 16 16" /></Icon>;

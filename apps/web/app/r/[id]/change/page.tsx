@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChangeImpact, ChangeKind } from "@code-genome/contracts";
+import type { ChangeImpact, ChangeKind, ImpactGraphMetrics } from "@code-genome/contracts";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useRef, useState } from "react";
 
@@ -81,7 +81,7 @@ function ChangeView() {
   }, [requestedPath]);
 
   return (
-    <div className="split" style={{ gridTemplateColumns: "minmax(0, 0.85fr) minmax(0, 1.35fr)" }}>
+    <div className="split" style={{ "--split-columns": "minmax(0, 0.85fr) minmax(0, 1.35fr)" } as React.CSSProperties}>
       <Panel title="What will break?" description="Name a file, list the files a pull request touches, or paste a diff. Nothing is stored.">
         <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
           <label className="field">
@@ -186,7 +186,7 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
                   <small>via {item.via.map((path, index) => <span key={path}>{index > 0 && ", "}<code>{path}</code></span>)}</small>
                   <small>{item.reasons.join("; ")}</small>
                   <EvidenceChips ids={item.evidence_ids} limit={3} />
-                  {item.signals && <WhyImpacted signals={item.signals} weighted={item.weighted_score ?? null} />}
+                  {item.signals && <WhyImpacted metrics={item.graph_metrics ?? null} signals={item.signals} weighted={item.weighted_score ?? null} />}
                 </div>
                 <Meter value={item.score} />
                 <span className="score">{Math.round(item.score * 100)}</span>
@@ -227,9 +227,11 @@ const SIGNALS = [
 function WhyImpacted({
   signals,
   weighted,
+  metrics,
 }: {
   signals: NonNullable<NonNullable<ChangeImpact["impacted"][number]["signals"]>>;
   weighted: number | null;
+  metrics: ImpactGraphMetrics | null;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -252,6 +254,17 @@ function WhyImpacted({
           })}
           {weighted !== null && (
             <div className="why-row why-total"><span>Weighted impact score</span><span /><span /><strong>{weighted.toFixed(2)}</strong></div>
+          )}
+          {metrics && (
+            <div className="why-metrics">
+              <span title="PageRank on the import graph: files that many widely used files depend on rank higher.">
+                PageRank <strong>{metrics.pagerank.toFixed(4)}</strong> <span className="muted">(higher than {Math.round(metrics.pagerank_percentile * 100)}% of files)</span>
+              </span>
+              <span title="Betweenness centrality: how often the file sits on shortest import paths between other files.">
+                Betweenness <strong>{metrics.betweenness.toFixed(3)}</strong>
+              </span>
+              <small className="muted">Graph position is context only; it is not part of the weighted score.</small>
+            </div>
           )}
           <small className="muted">Signals are normalised to 0–1 and come from the import graph and commit history of the analysed snapshot.</small>
         </div>

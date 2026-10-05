@@ -460,6 +460,8 @@ export type ChangeImpact = {
     modules: string[];
     signals?: { dependency: number; co_change: number; proximity: number; bug_correlation: number } | null;
     weighted_score?: number | null;
+    /** Import-graph position of the impacted file; context, not part of the weighted score. */
+    graph_metrics?: ImpactGraphMetrics | null;
   }>;
   modules: Array<{ name: string; changed_files: number; impacted_files: number; inferred: boolean }>;
   limitations: string[];
@@ -577,9 +579,18 @@ export type ComponentLink = { source: string; target: string; imports: number; c
 export type ModuleGraph = {
   repository_id: string;
   snapshot_sha: string;
-  nodes: ComponentNode[];
+  nodes: Array<ComponentNode & ComponentNodeExtras>;
   links: ComponentLink[];
   limitations: string[];
+};
+
+export type DocRewrite = {
+  model: string;
+  rewrite_version: string;
+  /** "accepted" only when the rewrite kept every citation and cited nothing new. */
+  status: "accepted" | "rejected" | "skipped";
+  reason: string | null;
+  created_at: string;
 };
 
 export type GeneratedDocuments = {
@@ -587,7 +598,16 @@ export type GeneratedDocuments = {
   snapshot_sha: string;
   version: string;
   generated_at: string;
-  documents: Array<{ name: string; description: string; markdown: string }>;
+  documents: Array<{
+    name: string;
+    description: string;
+    markdown: string;
+    /** Model-written readable version of `markdown`; null unless an accepted rewrite exists. */
+    rewritten_markdown?: string | null;
+    rewrite?: DocRewrite | null;
+  }>;
+  /** True when the API has a Gemini key, so POST /docs/rewrite can run. */
+  rewrite_available?: boolean;
 };
 
 // ---- Defect model v2 (random-forest candidate) and component instability forecasting.
@@ -631,6 +651,10 @@ export type InstabilityResult = {
     model?: InstabilityScores;
     baseline_persistence?: InstabilityScores;
     baseline_historical_rate?: InstabilityScores;
+    /** Optional PyTorch GRU challenger on the same hold-out (instability-gru@1). */
+    gru?: (InstabilityScores & { model_version: string }) | { model_version: string; status: "unavailable"; reason: string };
+    champion?: "logistic_regression" | "gru";
+    champion_rule?: string;
     test_base_rate?: number;
     note?: string;
   };
@@ -649,6 +673,7 @@ export type InstabilityResult = {
   feature_labels: Record<string, string>;
   contribution_method: string;
   training_seconds: number;
+  champion?: "logistic_regression" | "gru";
 };
 
 export type MlOverviewWithInstability = Omit<MlOverview, "tasks"> & {
@@ -672,6 +697,8 @@ export type RepositoryOverviewInstability = { unstable_components?: UnstableComp
 
 // ---- Multi-signal module discovery, richer defect features, weighted impact ranking.
 
+export type ImpactGraphMetrics = { pagerank: number; pagerank_percentile: number; betweenness: number };
+
 /** Components of the weighted impact score (impact-weighted@1), each in [0, 1]. */
 export type ImpactSignals = { dependency: number; co_change: number; proximity: number; bug_correlation: number };
 
@@ -680,6 +707,7 @@ export type ImpactItemWeighted = ImpactAnalysis["impacted"][number] & {
   signals?: ImpactSignals | null;
   /** 0.35·dependency + 0.30·co_change + 0.20·proximity + 0.15·bug_correlation. */
   weighted_score?: number | null;
+  graph_metrics?: ImpactGraphMetrics | null;
 };
 
 export type ImpactAnalysisWeighted = Omit<ImpactAnalysis, "impacted"> & { impacted: ImpactItemWeighted[] };
@@ -735,6 +763,7 @@ export type DefectScoresV3 = {
 export type DefectResultV3 = Omit<DefectResultV2, "metrics" | "dataset"> & {
   dataset: DefectResultV2["dataset"] & {
     features?: string[];
+    label_source?: string;
     code_metrics?: { used: string[]; missing: string[]; files_measured: Record<string, number>; note: string };
   };
   metrics: {
@@ -745,6 +774,22 @@ export type DefectResultV3 = Omit<DefectResultV2, "metrics" | "dataset"> & {
     test_base_rate?: number;
     decision_rule?: string;
     note?: string;
+    /** The same candidates scored on SZZ-lite "bug introduced in the period" labels (comparison only). */
+    szz_labels?: {
+      label_version: string;
+      label: string;
+      links_supplied: number;
+      links_used: number;
+      train_positive: number;
+      test_positive: number;
+      status: "evaluated" | "insufficient_data";
+      reason?: string;
+      heuristic_baseline?: DefectScoresV3;
+      logistic_regression?: DefectScoresV3;
+      random_forest?: DefectScoresV3;
+      gradient_boosting?: DefectScoresV3;
+      test_base_rate?: number;
+    };
   };
 };
 

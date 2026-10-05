@@ -7,6 +7,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, workspaceId } from "../lib/api";
 import { repoName } from "../lib/format";
 import {
+  BugIcon,
+  GenomeIcon,
   ActivityIcon,
   AuditIcon,
   ChatIcon,
@@ -39,12 +41,14 @@ export type SectionGroup = "Understand" | "Predict" | "Explain" | "Repository";
    will do, and explain it in plain language. Every view is always visible in the rail. */
 export const repoSections = [
   { slug: "", label: "Overview", group: null, icon: OverviewIcon, keywords: "summary genome status health score" },
+  { slug: "genome", label: "Genome graph", group: "Understand", icon: GenomeIcon, keywords: "software genome graph nodes relationships calls developers commits data stores apis" },
   { slug: "explorer", label: "Architecture explorer", group: "Understand", icon: LayersIcon, keywords: "components map modules architecture dependencies" },
   { slug: "docs", label: "Generated docs", group: "Understand", icon: DocIcon, keywords: "documentation architecture modules data flow dependencies business logic risk report markdown" },
   { slug: "architecture", label: "Modules and hotspots", group: "Understand", icon: HotspotIcon, keywords: "modules co-change hotspots" },
   { slug: "graph", label: "Dependency graph", group: "Understand", icon: GraphIcon, keywords: "imports nodes edges files" },
   { slug: "files", label: "Files", group: "Understand", icon: FilesIcon, keywords: "tree explorer manifest" },
   { slug: "history", label: "Evolution timeline", group: "Understand", icon: HistoryIcon, keywords: "commits timeline authors history" },
+  { slug: "bugs", label: "Bug history", group: "Understand", icon: BugIcon, keywords: "bugs szz fix commits introduced regression origin blame" },
   { slug: "change", label: "Change impact", group: "Predict", icon: DiffIcon, keywords: "what will break impact diff pull request pr patch change simulator" },
   { slug: "risk", label: "Risk", group: "Predict", icon: PulseIcon, keywords: "risk defect blast radius" },
   { slug: "compare", label: "Compare snapshots", group: "Predict", icon: CompareIcon, keywords: "compare snapshots branches drift" },

@@ -29,6 +29,8 @@ function Docs() {
   const params = useSearchParams();
   const docs = useResource(`${repository.id}:docs:${published?.snapshot_sha ?? ""}`, () => api.getDocs(repository.id));
   const [downloading, setDownloading] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
+  const [showSource, setShowSource] = useState(false);
   const requested = params.get("doc");
   const current = docs.data?.documents.find((item) => item.name === requested) ?? docs.data?.documents[0] ?? null;
 
@@ -40,6 +42,20 @@ function Docs() {
       toast(errorMessage(caught, "The document could not be downloaded."));
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function rewrite() {
+    setRewriting(true);
+    try {
+      const result = await api.rewriteDocs(repository.id);
+      const accepted = result.documents.filter((item) => item.rewrite?.status === "accepted").length;
+      toast(`${accepted} of ${result.documents.length} documents rewritten; the rest keep the evidence text.`);
+      docs.reload();
+    } catch (caught) {
+      toast(errorMessage(caught, "Readable versions could not be written."));
+    } finally {
+      setRewriting(false);
     }
   }
 
@@ -69,12 +85,39 @@ function Docs() {
         title={<code>{current.name}</code>}
         description={current.description}
         actions={
-          <button className="button button-secondary button-small" disabled={downloading} onClick={() => void download(current.name)} type="button">
-            <DownloadIcon size={15} />{downloading ? "Downloading…" : "Download"}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {current.rewritten_markdown && (
+              <div aria-label="Document version" className="segmented" role="group">
+                <button aria-pressed={!showSource} onClick={() => setShowSource(false)} type="button">Readable</button>
+                <button aria-pressed={showSource} onClick={() => setShowSource(true)} type="button">Evidence source</button>
+              </div>
+            )}
+            {docs.data.rewrite_available && (
+              <button className="button button-secondary button-small" disabled={rewriting} onClick={() => void rewrite()} type="button">
+                {rewriting ? "Writing…" : current.rewrite ? "Rewrite again" : "Write readable versions"}
+              </button>
+            )}
+            <button className="button button-secondary button-small" disabled={downloading} onClick={() => void download(current.name)} type="button">
+              <DownloadIcon size={15} />{downloading ? "Downloading…" : "Download"}
+            </button>
+          </div>
         }
       >
-        <Markdown onEvidence={openEvidence} source={current.markdown} />
+        {current.rewritten_markdown && !showSource && current.rewrite && (
+          <div style={{ marginBottom: 14 }}>
+            <Notice title="Written by a model from the evidence below">
+              {current.rewrite.model} rewrote this document ({current.rewrite.rewrite_version}, {formatTime(current.rewrite.created_at)}). It was kept because it preserves every citation of the deterministic version and cites nothing else. Switch to Evidence source to see the original.
+            </Notice>
+          </div>
+        )}
+        {current.rewrite && current.rewrite.status !== "accepted" && (
+          <div style={{ marginBottom: 14 }}>
+            <Notice tone="warn" title="Showing the evidence text">
+              The model-written version was not used: {current.rewrite.reason ?? "it did not pass the citation check."}
+            </Notice>
+          </div>
+        )}
+        <Markdown onEvidence={openEvidence} source={current.rewritten_markdown && !showSource ? current.rewritten_markdown : current.markdown} />
       </Panel>
     </div>
   );

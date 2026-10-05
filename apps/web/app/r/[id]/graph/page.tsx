@@ -159,7 +159,7 @@ function GraphView() {
   }
 
   return (
-    <div className="split" style={{ gridTemplateColumns: "minmax(0, 1fr) 340px" }}>
+    <div className="split split-side">
       <div className="graph-canvas">
         <svg
           aria-label={`Dependency graph with ${sim.nodes.length} nodes and ${sim.edges.length} edges`}

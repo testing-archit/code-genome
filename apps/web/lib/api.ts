@@ -3,16 +3,19 @@ import type {
   AnswerLanguage,
   Architecture,
   AuditEventRecord,
+  BugHistory,
   ChangeImpact,
   Conversation,
   ConversationSummary,
   ConversationTurn,
   DeliveryReport,
   Evidence,
+  EvolutionTimeline,
   ExportFormat,
   ExportKind,
   GroundedAnswer,
   GeneratedDocuments,
+  GenomeGraph,
   GraphProjection,
   ImpactAnalysis,
   MlOverview,
@@ -187,7 +190,21 @@ export const api = {
   },
   getOverview: (repositoryId: string) => request<RepositoryOverview>(`/repositories/${repositoryId}/overview`),
   getModuleGraph: (repositoryId: string) => request<ModuleGraph>(`/repositories/${repositoryId}/module-graph`),
+  getGenome: (repositoryId: string, focus: string | null, limit = 400) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (focus) params.set("focus", focus);
+    return request<GenomeGraph>(`/repositories/${repositoryId}/genome?${params}`);
+  },
+  getBugs: (repositoryId: string, path: string | null, limit = 60) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (path) params.set("path", path);
+    return request<BugHistory>(`/repositories/${repositoryId}/bugs?${params}`);
+  },
+  getTimeline: (repositoryId: string, bucket: "week" | "month") =>
+    request<EvolutionTimeline>(`/repositories/${repositoryId}/timeline?${new URLSearchParams({ bucket })}`),
   getDocs: (repositoryId: string) => request<GeneratedDocuments>(`/repositories/${repositoryId}/docs`),
+  rewriteDocs: (repositoryId: string) =>
+    request<GeneratedDocuments>(`/repositories/${repositoryId}/docs/rewrite`, { method: "POST" }),
   downloadDoc: async (repositoryId: string, name: string) => {
     const response = await send(`/repositories/${repositoryId}/docs/${encodeURIComponent(name)}/download`);
     saveBlob(await response.blob(), name);

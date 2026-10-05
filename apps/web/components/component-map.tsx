@@ -1,9 +1,43 @@
 "use client";
 
-import type { ComponentLink, ComponentNode } from "@code-genome/contracts";
+import type { ComponentLink, ComponentNode, ComponentNodeExtras } from "@code-genome/contracts";
 import { useMemo } from "react";
 
-type Placed = ComponentNode & { x: number; y: number; width: number; layer: number };
+type MapNode = ComponentNode & ComponentNodeExtras;
+type Placed = MapNode & { x: number; y: number; width: number; layer: number; kind: "component" | "datastore" | "integration" };
+type ResourceLink = { source: string; target: string; access: string; evidence_ids: string[] };
+
+/* Architecture tiers, top to bottom of a request: entry points, logic, then data. */
+const TIER: Record<string, number> = { api: 0, ui: 0, service: 1, contract: 1, util: 1, config: 1, "infra/scripts": 1, test: 1, unknown: 1, data: 2 };
+
+/** Data stores and external integrations used by components, as their own nodes. */
+function resources(nodes: MapNode[]) {
+  const extra = new Map<string, MapNode & { kind: "datastore" | "integration" }>();
+  const links: ResourceLink[] = [];
+  for (const node of nodes) {
+    for (const store of node.datastores ?? []) {
+      const id = `datastore:${store.name}`;
+      const current = extra.get(id);
+      extra.set(id, { ...(current ?? blank(id, store.name, "Data store detected from client libraries and data-access calls (inferred).")), kind: "datastore", files: (current?.files ?? 0) + store.files.length });
+      links.push({ source: node.name, target: id, access: store.access, evidence_ids: store.evidence_ids });
+    }
+    for (const integration of node.integrations ?? []) {
+      const id = `integration:${integration.name}`;
+      const current = extra.get(id);
+      extra.set(id, { ...(current ?? blank(id, integration.name, `External integration${integration.host ? ` (${integration.host})` : ""} detected from imports and literal URLs.`)), kind: "integration", files: (current?.files ?? 0) + integration.files.length });
+      links.push({ source: node.name, target: id, access: "calls", evidence_ids: integration.evidence_ids });
+    }
+  }
+  return { extra: [...extra.values()], links };
+}
+
+function blank(id: string, label: string, description: string): MapNode {
+  return { name: id, files: 0, risk: null, fan_in: 0, fan_out: 0, externals: [], inferred: true, description, riskiest: [], paths: [label] };
+}
+
+export function displayName(node: { name: string; paths: string[] }): string {
+  return node.name.startsWith("datastore:") || node.name.startsWith("integration:") ? node.paths[0] ?? node.name : node.name;
+}
 
 const NODE_HEIGHT = 46;
 const LAYER_GAP = 72;
@@ -14,7 +48,10 @@ const ROW_GAP = 18;
  * so dependencies read left to right. Import cycles are collapsed before layering so the
  * layout always terminates and stays deterministic.
  */
-function layout(nodes: ComponentNode[], links: ComponentLink[], compact: boolean) {
+function layout(components: MapNode[], links: ComponentLink[], compact: boolean, layered: boolean) {
+  const resourceNodes = layered ? resources(components).extra : [];
+  const nodes: MapNode[] = [...components, ...resourceNodes];
+  const kindOf = new Map<string, Placed["kind"]>(resourceNodes.map((node) => [node.name, node.kind]));
   const names = nodes.map((node) => node.name);
   const imports = links.filter((link) => link.imports > 0 && link.source !== link.target);
   const outgoing = new Map<string, string[]>(names.map((name) => [name, []]));
@@ -71,9 +108,23 @@ function layout(nodes: ComponentNode[], links: ComponentLink[], compact: boolean
     }
   }
 
+  if (layered) {
+    // Role tiers replace import layering when roles separate entry points, logic, and data;
+    // otherwise keep import layers. Data stores and integrations always get the last column.
+    const tiers = new Set(components.map((node) => TIER[node.role ?? "unknown"] ?? 1));
+    const importLayer = new Map(components.map((node) => [node.name, layerOf.get(group.get(node.name) ?? 0) ?? 0]));
+    const last = tiers.size > 1 ? 3 : Math.max(0, ...importLayer.values()) + 1;
+    layerOf.clear();
+    nodes.forEach((node, position) => {
+      const layer = kindOf.has(node.name) ? last : tiers.size > 1 ? (TIER[node.role ?? "unknown"] ?? 1) : (importLayer.get(node.name) ?? 0);
+      group.set(node.name, -1 - position);
+      layerOf.set(-1 - position, layer);
+    });
+  }
+
   // Wide enough for the label and the "N files, risk N%" line, whichever is longer.
   const width = (name: string) => Math.min(compact ? 170 : 230, 26 + Math.max(label(name, compact).length * 7.2, 21 * 6.2));
-  const layers = new Map<number, ComponentNode[]>();
+  const layers = new Map<number, MapNode[]>();
   for (const node of nodes) {
     const layer = layerOf.get(group.get(node.name) ?? 0) ?? 0;
     if (!layers.has(layer)) layers.set(layer, []);
@@ -91,6 +142,7 @@ function layout(nodes: ComponentNode[], links: ComponentLink[], compact: boolean
       sorted.forEach((node, row) => {
         placed.push({
           ...node,
+          kind: kindOf.get(node.name) ?? "component",
           layer,
           width: width(node.name),
           x: 12 + position * (columnWidth + LAYER_GAP),
@@ -103,6 +155,7 @@ function layout(nodes: ComponentNode[], links: ComponentLink[], compact: boolean
 }
 
 function label(name: string, compact: boolean): string {
+  if (name.startsWith("datastore:") || name.startsWith("integration:")) name = name.slice(name.indexOf(":") + 1);
   const parts = name.split("/");
   const short = compact && parts.length > 2 ? parts.slice(-2).join("/") : name;
   const limit = compact ? 20 : 28;
@@ -115,19 +168,24 @@ export function ComponentMap({
   selected,
   onSelect,
   compact = false,
+  layered = false,
 }: {
-  nodes: ComponentNode[];
+  nodes: MapNode[];
   links: ComponentLink[];
   selected?: string | null;
   onSelect?: (name: string) => void;
   compact?: boolean;
+  /** Arrange by architecture role and draw data stores and integrations as nodes. */
+  layered?: boolean;
 }) {
-  const { placed, width, height } = useMemo(() => layout(nodes, links, compact), [nodes, links, compact]);
+  const hasRoles = layered && nodes.some((node) => node.role);
+  const { placed, width, height } = useMemo(() => layout(nodes, links, compact, hasRoles), [nodes, links, compact, hasRoles]);
+  const resourceLinks = useMemo(() => (hasRoles ? resources(nodes).links : []), [nodes, hasRoles]);
   const position = new Map(placed.map((node) => [node.name, node]));
   const heaviest = Math.max(1, ...links.map((link) => link.imports));
   const related = new Set(
     selected
-      ? links.filter((link) => link.source === selected || link.target === selected).flatMap((link) => [link.source, link.target])
+      ? [...links, ...resourceLinks].filter((link) => link.source === selected || link.target === selected).flatMap((link) => [link.source, link.target])
       : [],
   );
 
@@ -176,14 +234,40 @@ export function ComponentMap({
           </path>
         );
       })}
+      {resourceLinks.map((link) => {
+        const from = position.get(link.source);
+        const to = position.get(link.target);
+        if (!from || !to) return null;
+        const x1 = from.x + from.width;
+        const y1 = from.y + NODE_HEIGHT / 2;
+        const x2 = to.x - 4;
+        const y2 = to.y + NODE_HEIGHT / 2;
+        const bend = (x2 - x1) / 2;
+        const active = selected ? link.source === selected || link.target === selected : false;
+        return (
+          <path
+            className="component-link resource-link"
+            d={`M${x1} ${y1} C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`}
+            data-active={active}
+            data-dimmed={Boolean(selected) && !active}
+            fill="none"
+            key={`${link.source}->${link.target}`}
+            strokeDasharray="2 4"
+            strokeWidth={1.5}
+          >
+            <title>{`${link.source} → ${displayName(to)}: ${link.access} (inferred)`}</title>
+          </path>
+        );
+      })}
       {placed.map((node) => {
         const risk = node.risk ?? 0;
         const isSelected = node.name === selected;
         const dimmed = Boolean(selected) && !isSelected && !related.has(node.name);
         return (
           <g
-            aria-label={`${node.name}, ${node.files} files${node.risk === null ? "" : `, risk ${Math.round(risk * 100)}%`}`}
+            aria-label={node.kind === "component" ? `${node.name}, ${node.files} files${node.risk === null ? "" : `, risk ${Math.round(risk * 100)}%`}` : `${node.kind === "datastore" ? "Data store" : "Integration"} ${displayName(node)}`}
             className="component-node"
+            data-kind={node.kind}
             data-dimmed={dimmed}
             data-selected={isSelected}
             key={node.name}
@@ -194,10 +278,14 @@ export function ComponentMap({
             transform={`translate(${node.x} ${node.y})`}
           >
             <rect height={NODE_HEIGHT} rx={10} width={node.width} />
-            <rect className="component-risk" height={4} rx={2} width={Math.max(4, (node.width - 20) * risk)} x={10} y={NODE_HEIGHT - 9} />
+            {node.kind === "component" && <rect className="component-risk" height={4} rx={2} width={Math.max(4, (node.width - 20) * risk)} x={10} y={NODE_HEIGHT - 9} />}
             <text x={12} y={19}>{label(node.name, compact)}</text>
             <text className="component-meta" x={12} y={33}>
-              {node.files} {node.files === 1 ? "file" : "files"}{node.risk === null ? "" : `, risk ${Math.round(risk * 100)}%`}
+              {node.kind === "datastore"
+                ? "data store (inferred)"
+                : node.kind === "integration"
+                  ? "external integration"
+                  : `${node.role && hasRoles ? `${node.role} · ` : ""}${node.files} ${node.files === 1 ? "file" : "files"}${node.risk === null ? "" : `, risk ${Math.round(risk * 100)}%`}`}
             </text>
             <title>{`${node.name}\n${node.description}`}</title>
           </g>
