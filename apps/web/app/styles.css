@@ -740,3 +740,6 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 /* Children of ad-hoc grid stacks (style="display: grid") may shrink below their content's
    width; otherwise a wide table widens the implicit column and slides under its neighbour. */
 [style*="display: grid"] > * { min-width: 0; }
+/* A stack stretched to a taller neighbour's height keeps its rows packed at the top instead
+   of spreading them apart (which opened large gaps above charts on Models). */
+[style*="display: grid"] { align-content: start; }
