@@ -11,12 +11,12 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `GET /repositories/{id}/connection` | connection metadata, never the secret | `200 RepositoryConnection` |
 | `DELETE /repositories/{id}/connection` | revoke and erase credential envelope | `204` |
 | `POST /repositories/{id}/analyses` | queue snapshot analysis | `202 AnalysisRun` |
-| `GET /analyses/{id}` | job progress/diagnostics | `200 AnalysisRun` |
+| `GET /analyses/{id}` | job progress/diagnostics, live `stage` (`fetching` → `indexing` → `mining_history` → `evolution` → `tracing_bugs` → `parsing` → `publishing` → `complete`) and `progress_counts` (files, commits, co-change pairs, modules, fix commits, bug links, dependencies, calls, knowledge excerpts) | `200 AnalysisRun` |
 | `GET /repositories/{id}/inventory` | bounded refs, commits, and file manifest | `200 RepositoryInventory` |
 | `GET /repositories/{id}/architecture` | inferred modules, hotspots, co-change | `200 Architecture` |
 | `GET /repositories/{id}/graph` | filtered snapshot graph | `200 GraphProjection` |
 | `GET /evidence/{id}` | immutable source provenance locator | `200 Evidence` |
-| `GET /repositories/{id}/impact` | rank impact for file/symbol/change | `200 ImpactResult` |
+| `GET /repositories/{id}/impact?path=` | one-hop impact for a file; each item has the weighted `signals` (dependency, co-change, proximity, bug correlation), `weighted_score`, and `graph_metrics` (PageRank, its percentile, betweenness; context, not part of the score). Package nodes are excluded | `200 ImpactResult` |
 | `POST /delivery-reports` | create report + claims | `201 DeliveryReport` |
 | `POST /delivery-reports/{id}/assessments` | run deterministic verification | `200 DeliveryReport` |
 | `GET /delivery-reports/{id}` | report, claims, assessments | `200 DeliveryReport` |
@@ -41,6 +41,14 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `POST /repositories/{id}/ml/train` | retrain all snapshot models (replaces prior runs atomically) | `200 MlOverview` |
 | `GET /repositories/{id}/search?q=&kind=` | ranked search with the repository's selected retrieval mode | `200 SearchResults` |
 | `POST /chat/answers/{id}/feedback` | record answer feedback | `200` |
+| `GET /repositories/{id}/overview` | health score, counts, riskiest files and components, instability forecast, README summary | `200 RepositoryOverview` |
+| `GET /repositories/{id}/module-graph` | components with inferred role and reason, data stores, integrations, contributors, commit/fix counts, last change; import and co-change links | `200 ModuleGraph` |
+| `GET /repositories/{id}/docs` | six generated Markdown documents with citations; `rewritten_markdown`/`rewrite` when an accepted model-written version exists for the same source text | `200 GeneratedDocuments` |
+| `POST /repositories/{id}/docs/rewrite` | ask Gemini for readable versions; each is stored with model and source hash and accepted only if it keeps every citation and heading and cites nothing new (`docs-rewrite@1`). `409 GEMINI_NOT_CONFIGURED` without a key | `200 GeneratedDocuments` |
+| `GET /repositories/{id}/docs/{name}/download` | download one generated document (audited) | `200 text/markdown` |
+| `GET /repositories/{id}/genome?focus=&limit=` | Software Genome Graph: files, components, symbols, developers, commits, packages, data stores, external APIs; 16 edge types, each with evidence and `inferred`. `focus` (file path or component) returns its 2-hop neighbourhood | `200 GenomeGraph` |
+| `GET /repositories/{id}/bugs?path=&limit=` | SZZ-lite history: fix commits and candidate bug-introducing commits with blamed lines, confidence, bulk/boundary flags; per-file counts. Candidates, not proof | `200 BugHistory` |
+| `GET /repositories/{id}/timeline?bucket=week\|month&path=` | commits, churn, fixes, authors, and bug-introducing commits per component and bucket (UTC) | `200 EvolutionTimeline` |
 | `POST /workspaces/{id}/retention/run` | preview/execute report retention | `200` |
 | `GET /workspaces/{id}/audit-events` | audited JSON/CSV export | `200` |
 
@@ -98,3 +106,17 @@ Use `Idempotency-Key` on all state-changing POSTs. Cursor pagination and maximum
 `GET /repositories/{id}/graph` selects the latest published snapshot unless `snapshot_sha` is supplied. `limit` is capped at 1,000 nodes and `cursor` advances through stable kind/natural-key order. Edges on a page include only relationships whose endpoints are both present on that page; the response states this limitation whenever pagination is active.
 
 Every projection returns the repository/snapshot IDs, pinned commit SHA, analysis version, source classes searched, node evidence IDs, edge evidence ID and confidence, parse/import diagnostics, and a next cursor. Unpublished or cross-workspace snapshots return `404` without revealing their existence.
+
+## Inferred outputs and their versions
+
+Every inferred result names the method that produced it so a reader can judge it:
+
+| Output | Version | Notes |
+|---|---|---|
+| Bug-introducing commits | `szz-lite@1` | Lines removed by a fix, blamed on the parent; bulk and shallow-boundary links get lower confidence. |
+| Flow answers ("how does X work?") | `code-flow@1` | Walks static CALLS/IMPORTS up to three hops plus inferred data-store/API use; every step cites its edge. Questions without a resolvable target fall back to retrieval. |
+| Impact ranking | `impact-weighted@1` | 0.35 dependency + 0.30 co-change + 0.20 proximity + 0.15 bug correlation; weights fixed by the spec. |
+| Defect labels compared | `szz-introducing@1` | Reported beside the deployed fix-touch label in `metrics.szz_labels`; not used to pick the deployed model. |
+| Instability forecast | `instability-windowed-logreg@1` or `instability-gru@1` | The optional GRU (extra `deep`) is deployed only when its held-out average precision is higher. |
+| Semantic similarity | `lsa` or `sentence-transformer:<model>` | Named in the genome response's limitations; optional extra `embeddings`, setting `CODE_GENOME_SEMANTIC_BACKEND`. |
+| Readable docs | `docs-rewrite@1` | Model text is shown only when its citations match the deterministic source exactly. |

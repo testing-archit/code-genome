@@ -20,7 +20,7 @@ The four product engines are:
 ## Features
 
 - **Repository genome**: files drawn as chromosome-style bands by module and hotspot; interactive dependency graph; file explorer with risk and impact per file; commit history with activity, authors, and ML intent labels.
-- **Trained models** (`packages/ml`): commit-intent classification, temporal defect-proneness prediction, change-impact link prediction, hybrid BM25 + LSA retrieval, Louvain module discovery, and isolation-forest unusual-commit detection. Every model is evaluated on held-out data against a baseline and shown on the **Models** page. See [ML_SPEC.md](ML_SPEC.md).
+- **Trained models** (`packages/ml`): commit-intent classification, temporal defect-proneness prediction (logistic regression, random forest, gradient boosting; also scored on SZZ "bug introduced" labels), change-impact link prediction and weighted ranking, hybrid BM25 + LSA retrieval, multi-signal module discovery, isolation-forest unusual-commit detection, and component instability forecasting. Every model is evaluated on held-out data against a baseline and shown on the **Models** page. See [ML_SPEC.md](ML_SPEC.md).
 - **Chat**: multi-turn conversations whose answers cite the modules, files, hotspots, and commits they used. English, Hindi, and Hinglish, with dictation and read-aloud.
 - **Voice agent**: Gemini 3.8 Live over a single-use ephemeral token (the API key never reaches the browser). The model must call the repository evidence tool before answering, and speaks English, Hindi, or Hinglish.
 - **Project knowledge**: analysis stores redacted, line-cited excerpts of READMEs, docs, package manifests, and text source (any common language; vendored, build, and lock files skipped). Chat and voice answer "what does this project do?" from the repository's own README, route "if I change X what breaks?" to the impact engine (reporting missing files with the closest real paths), and answer code questions from source excerpts. Re-run analysis on an existing commit to backfill knowledge.
@@ -29,7 +29,14 @@ The four product engines are:
 - **Change check**: paste a `git diff` or file list to rank downstream impact, risk, and touched modules.
 - **Snapshot compare** and **exports**: diff two analysed snapshots; download architecture, risk, or comparison reports as cited Markdown or JSON (each export is audited).
 - **Automatic analysis**: opt-in GitHub push webhook (`CODE_GENOME_GITHUB_WEBHOOK_SECRET`) with signature checks and replay protection.
-- **Search**, **delivery audit** with history, **private repository access**, **activity log**, command palette (⌘K), and light/dark themes.
+- **Software Genome Graph**: one typed graph of files, components, functions and classes, developers, commits, packages, data stores, and external APIs with 16 relationship types (imports, calls, co-change, ownership, semantic similarity, bugs introduced and fixed, reads and writes). Every edge carries evidence; inferred ones are drawn dashed. Focus on a file or component for its 2-hop neighbourhood.
+- **Bug history (SZZ-lite)**: fix commits traced back to the commits that likely introduced the bug, with blamed lines and confidence, per fix and per file. Labelled as candidates, not proof.
+- **Evolution by component**: weekly or monthly lanes of churn, fixes, and bug-introducing commits per component, with the instability forecast, to see when a module became a hotspot.
+- **Architecture by role**: components placed as entry points (API, UI), services, and data access, with detected data stores and integrations as their own nodes; the side panel shows why each role was assigned, contributors, and history.
+- **"How does X work?"**: chat and voice follow the code graph from the named file, function, or component (calls, imports, data stores) and cite every step.
+- **Readable docs**: optional Gemini rewrite of the six generated documents, kept only when every citation survives.
+- **Optional model backends**: `uv sync --extra deep` adds a PyTorch GRU challenger for instability forecasting; `--extra embeddings` adds sentence-transformer similarity. Without them the lightweight models run and the results say so.
+- **Search**, **delivery audit** with history, **private repository access**, **activity log**, command palette (⌘K), live analysis stages with counts, and light/dark (teal) themes.
 
 Chat phrasing and voice use Gemini when `GEMINI_API_KEY` is set (`GEMINI_MODEL`, default `gemini-3.8-flash`; `GEMINI_LIVE_MODEL`, default `gemini-3.8-live`). Without a key, chat answers stay extractive and voice is unavailable; the models and search are unaffected.
 
@@ -66,6 +73,8 @@ npm run lint && npm run typecheck && npm run build
 uv run ruff check services infra packages
 uv run mypy services/api/code_genome_api services/worker/code_genome_worker packages/analyzers/code_genome_analyzers packages/genome/code_genome_genome packages/git/code_genome_git packages/ml/code_genome_ml
 uv run pytest
+# Run the API tests against Postgres instead of in-memory SQLite:
+CODE_GENOME_TEST_DATABASE_URL=postgresql+psycopg://user@localhost/scratch_db uv run pytest services/api/tests
 ```
 
 Structural analysis supports public repositories and private GitHub repositories through a read-only fine-grained PAT or GitHub App installation token. Credentials are AES-256-GCM encrypted with workspace/repository context and are supplied to Git only through an ephemeral askpass helper. Workers maintain locked bare mirrors, fetch branches incrementally, pin commit/tree SHAs, and publish bounded branch, commit, file-manifest, graph, and source-range evidence. Set a deployment-managed encryption key before enabling private access; the development header identity mode is not production authentication.
