@@ -9,6 +9,7 @@ import { Empty, Loading, Notice, Panel } from "../../../../components/ui";
 import { useWorkspace } from "../../../../components/workspace";
 import { formatBytes, formatTime, shortSha } from "../../../../lib/format";
 import { api, errorMessage } from "../../../../lib/api";
+import { orderSnapshots } from "../../../../lib/snapshots";
 import { useResource } from "../../../../lib/use-resource";
 
 export default function ComparePage() {
@@ -22,13 +23,6 @@ export default function ComparePage() {
 function snapshotLabel(item: SnapshotSummary): string {
   const point = item.as_of ? `as of ${item.as_of.length === 40 ? shortSha(item.as_of) : item.as_of}` : "branch head";
   return `${shortSha(item.commit_sha)} · ${item.refs.join(", ") || "no ref"} · ${point} · analysed ${formatTime(item.published_at)}`;
-}
-
-/** Branch-head snapshots first (newest analysis first), then past points (latest point first). */
-function ordered(items: SnapshotSummary[]): SnapshotSummary[] {
-  const heads = items.filter((item) => !item.as_of);
-  const past = items.filter((item) => item.as_of).sort((a, b) => (b.as_of ?? "").localeCompare(a.as_of ?? ""));
-  return [...heads, ...past];
 }
 
 function PastPointForm() {
@@ -71,7 +65,7 @@ function CompareView() {
   const snapshots = useResource(`${repository.id}:snapshots:${published?.snapshot_sha ?? ""}`, () => api.listSnapshots(repository.id));
   const [base, setBase] = useState<string | null>(null);
   const [head, setHead] = useState<string | null>(null);
-  const items = ordered(snapshots.data ?? []);
+  const items = orderSnapshots(snapshots.data ?? []);
   const headSha = head ?? items[0]?.commit_sha ?? null;
   const baseSha = base ?? items[1]?.commit_sha ?? null;
   const ready = Boolean(baseSha && headSha && baseSha !== headSha);

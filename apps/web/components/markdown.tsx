@@ -2,31 +2,28 @@
 
 import { Fragment } from "react";
 
+import { parseLink, tokenize } from "../lib/markdown-inline";
+
 /**
  * A deliberately small renderer for the Markdown this app generates (headings, lists,
  * tables, quotes, code spans, bold, links). Text is rendered as React text, never as HTML, so
  * repository content cannot inject markup. Evidence references such as `evidence:ev_…` and
  * `commit:<sha>` become buttons that open the evidence drawer.
  */
-const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]\n]+\]\([^)\s]+\)|\b(?:evidence|commit|module|hotspot):[\w./@-]{6,})/g;
-const LINK = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/;
-
 function Inline({ text, onEvidence }: { text: string; onEvidence?: (id: string) => void }) {
-  const parts = text.split(INLINE);
+  const parts = tokenize(text);
   return (
     <>
       {parts.map((part, index) => {
         if (!part) return null;
         if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
         if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
-        const link = LINK.exec(part);
+        const link = parseLink(part);
         if (link) {
-          // Only absolute http(s) URLs become links; README-relative anchors and any other
-          // scheme (e.g. javascript:) render as their text.
-          return /^https?:\/\//i.test(link[2]) ? (
-            <a href={link[2]} key={index} rel="noopener noreferrer" target="_blank">{link[1]}</a>
+          return link.href ? (
+            <a href={link.href} key={index} rel="noopener noreferrer" target="_blank">{link.text}</a>
           ) : (
-            <Fragment key={index}>{link[1]}</Fragment>
+            <Fragment key={index}>{link.text}</Fragment>
           );
         }
         if (/^(evidence|commit|module|hotspot):/.test(part)) {
