@@ -458,6 +458,8 @@ export type ChangeImpact = {
     evidence_ids: string[];
     via: string[];
     modules: string[];
+    signals?: { dependency: number; co_change: number; proximity: number; bug_correlation: number } | null;
+    weighted_score?: number | null;
   }>;
   modules: Array<{ name: string; changed_files: number; impacted_files: number; inferred: boolean }>;
   limitations: string[];

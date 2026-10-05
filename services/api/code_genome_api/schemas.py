@@ -534,6 +534,8 @@ class ChangeImpactItemResponse(BaseModel):
     evidence_ids: list[str]
     via: list[str]
     modules: list[str]
+    signals: ImpactSignalsResponse | None = None
+    weighted_score: float | None = None
 
 
 class ChangeModuleResponse(BaseModel):

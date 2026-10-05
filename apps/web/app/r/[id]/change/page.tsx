@@ -186,6 +186,7 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
                   <small>via {item.via.map((path, index) => <span key={path}>{index > 0 && ", "}<code>{path}</code></span>)}</small>
                   <small>{item.reasons.join("; ")}</small>
                   <EvidenceChips ids={item.evidence_ids} limit={3} />
+                  {item.signals && <WhyImpacted signals={item.signals} weighted={item.weighted_score ?? null} />}
                 </div>
                 <Meter value={item.score} />
                 <span className="score">{Math.round(item.score * 100)}</span>
@@ -212,5 +213,49 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
 
       <div className="limitations">{result.limitations.map((item) => <span key={item}>{item}</span>)}</div>
     </>
+  );
+}
+
+const SIGNALS = [
+  { key: "dependency", label: "Direct dependency", weight: 0.35, hint: "It imports the changed file, directly or through one more file." },
+  { key: "co_change", label: "Changed together", weight: 0.3, hint: "How reliably the two files have changed in the same commits." },
+  { key: "proximity", label: "Graph proximity", weight: 0.2, hint: "How close they are in the import graph, up to three hops." },
+  { key: "bug_correlation", label: "Shared bug fixes", weight: 0.15, hint: "Share of bug-fix commits on the changed file that also touched this one." },
+] as const;
+
+/** The spec's explainable impact score: each signal, its weight, and what it contributed. */
+function WhyImpacted({
+  signals,
+  weighted,
+}: {
+  signals: NonNullable<NonNullable<ChangeImpact["impacted"][number]["signals"]>>;
+  weighted: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="why">
+      <button aria-expanded={open} className="link-button" onClick={() => setOpen((value) => !value)} type="button">
+        {open ? "Hide why" : "Why?"}
+      </button>
+      {open && (
+        <div className="why-body">
+          {SIGNALS.map((signal) => {
+            const value = signals[signal.key];
+            return (
+              <div className="why-row" key={signal.key} title={signal.hint}>
+                <span>{signal.label}</span>
+                <div className="meter" aria-hidden="true"><i style={{ width: `${Math.max(2, value * 100)}%` }} /></div>
+                <span className="muted small">{value.toFixed(2)} × {signal.weight}</span>
+                <strong>{(value * signal.weight).toFixed(2)}</strong>
+              </div>
+            );
+          })}
+          {weighted !== null && (
+            <div className="why-row why-total"><span>Weighted impact score</span><span /><span /><strong>{weighted.toFixed(2)}</strong></div>
+          )}
+          <small className="muted">Signals are normalised to 0–1 and come from the import graph and commit history of the analysed snapshot.</small>
+        </div>
+      )}
+    </div>
   );
 }

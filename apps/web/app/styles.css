@@ -670,3 +670,11 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 @media (max-width: 560px) {
   .topbar-title > .muted { display: none; }
 }
+
+.why { display: grid; gap: 8px; }
+.why .link-button { justify-self: start; font-size: 13px; }
+.why-body { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: var(--radius-m); background: var(--glass-2); }
+.why-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(60px, 1.2fr) auto 44px; gap: 10px; align-items: center; font-size: 13px; }
+.why-row .meter { width: 100%; }
+.why-row strong { text-align: right; font-variant-numeric: tabular-nums; }
+.why-total { border-top: 1px solid var(--rule); padding-top: 6px; }

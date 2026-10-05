@@ -101,8 +101,14 @@ def check_change_impact(
                     evidence_ids=list(neighbour.evidence_ids),
                     via=[item.path],
                     modules=modules_by_path.get(neighbour.path, []),
+                    signals=neighbour.signals,
+                    weighted_score=neighbour.weighted_score,
                 )
                 continue
+            # Keep the "why" from whichever changed file links to it most strongly.
+            if (neighbour.weighted_score or 0) > (existing.weighted_score or 0):
+                existing.signals = neighbour.signals
+                existing.weighted_score = neighbour.weighted_score
             existing.score = max(existing.score, neighbour.score)
             existing.via.append(item.path)
             existing.reasons.extend(r for r in neighbour.reasons if r not in existing.reasons)
