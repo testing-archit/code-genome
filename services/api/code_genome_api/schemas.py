@@ -149,6 +149,8 @@ class EvidenceResponse(BaseModel):
     end_column: int | None
     extractor_version: str
     observed_at: datetime
+    heading: str | None = None
+    excerpt: str | None = None
 
 
 class CredentialKind(StrEnum):

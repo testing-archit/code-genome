@@ -86,6 +86,8 @@ export type Evidence = {
   end_column: number | null;
   extractor_version: string;
   observed_at: string;
+  heading?: string | null;
+  excerpt?: string | null;
 };
 
 export type RepositoryInventory = {

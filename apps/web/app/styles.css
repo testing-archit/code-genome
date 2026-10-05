@@ -542,3 +542,5 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .kv dd { margin-bottom: 8px; }
   h1 { font-size: 23px; }
 }
+
+.evidence-excerpt { margin: 14px 0; padding: 12px 14px; max-height: 320px; overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius-m, 10px); background: var(--glass); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }

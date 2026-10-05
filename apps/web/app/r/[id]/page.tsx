@@ -102,7 +102,7 @@ export default function OverviewPage() {
             <form onSubmit={ask} style={{ display: "grid", gap: 12 }}>
               <div className="composer-box">
                 <label className="sr-only" htmlFor="overview-question">Question</label>
-                <textarea id="overview-question" onChange={(event) => setQuestion(event.target.value)} placeholder="What changed recently? · Billing module kahan hai?" rows={1} value={question} />
+                <textarea id="overview-question" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} placeholder="What changed recently? · Billing module kahan hai?" rows={1} value={question} />
                 <button aria-label="Ask" className="button button-primary" type="submit"><SendIcon size={16} /></button>
               </div>
               <div className="suggestions">

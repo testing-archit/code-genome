@@ -87,7 +87,9 @@ def search_repository(
     _repository(db, repository_id, actor)
     snapshot = _snapshot(db, repository_id, actor)
     allowed = {
-        item for item in kind or [] if item in {"file", "module", "hotspot", "commit"}
+        item
+        for item in kind or []
+        if item in {"file", "module", "hotspot", "commit", "doc", "code"}
     } or None
     mode = ml.retrieval_mode(db, snapshot)
     hits = ml.retriever(db, snapshot).search(q, limit=limit, kinds=allowed, mode=mode)
@@ -119,7 +121,8 @@ def search_repository(
         message=None if hits else NO_EVIDENCE,
         limitations=[
             f"Scope: snapshot {snapshot.commit_sha[:12]}; sources searched: analyzed files and "
-            "their declared symbols, inferred modules, hotspots, and up to 500 recent commits.",
+            "their declared symbols, README and docs, manifests, source excerpts, inferred "
+            "modules, hotspots, and up to 500 recent commits.",
             "Semantic matches come from LSA embeddings and are inferred, not exact.",
         ],
     )

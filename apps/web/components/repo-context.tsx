@@ -70,12 +70,19 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
     setRepositoryState(repositoryId, latestRun?.state);
   }, [latestRun?.state, repositoryId, setRepositoryState]);
 
+  const pollingRunId = latestRun && !terminal.has(latestRun.state) ? latestRun.id : null;
   useEffect(() => {
-    if (!latestRun || terminal.has(latestRun.state)) return;
-    const timer = window.setInterval(() => {
+    if (!pollingRunId) return;
+    // One request in flight at a time, backing off from 2s to 5s, so a long analysis
+    // never pushes the browser past the API rate limit.
+    let active = true;
+    let delay = 2000;
+    let timer = 0;
+    const poll = () => {
       api
-        .getAnalysis(latestRun.id)
+        .getAnalysis(pollingRunId)
         .then((updated) => {
+          if (!active) return;
           setRuns((current) => [updated, ...current.filter((run) => run.id !== updated.id)]);
           if (updated.state === "SUCCEEDED") {
             invalidate(`${repositoryId}:`);
@@ -84,10 +91,19 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
             toast("Analysis failed. See the run details on the overview.");
           }
         })
-        .catch(() => undefined);
-    }, 1200);
-    return () => window.clearInterval(timer);
-  }, [latestRun, repositoryId, toast]);
+        .catch(() => undefined)
+        .finally(() => {
+          if (!active) return;
+          delay = Math.min(5000, delay + 500);
+          timer = window.setTimeout(poll, delay);
+        });
+    };
+    timer = window.setTimeout(poll, delay);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [pollingRunId, repositoryId, toast]);
 
   const startAnalysis = useCallback(async () => {
     if (!repository) return;
@@ -307,17 +323,24 @@ function EvidenceDrawer({ evidenceId, onClose }: { evidenceId: string; onClose: 
       ? `Lines ${evidence.start_line}${evidence.end_line && evidence.end_line !== evidence.start_line ? `–${evidence.end_line}` : ""}`
       : "Whole file";
     const lineAnchor = evidence.start_line ? `#L${evidence.start_line}${evidence.end_line ? `-L${evidence.end_line}` : ""}` : "";
+    // GitHub renders Markdown, which ignores line anchors unless the plain view is requested.
+    const plain = /\.(md|mdx|markdown)$/i.test(evidence.path) && lineAnchor ? "?plain=1" : "";
+    const sourcePath = evidence.path.split("/").map(encodeURIComponent).join("/");
     body = (
       <>
         <dl className="kv">
           <dt>File</dt><dd><code>{evidence.path}</code></dd>
           <dt>Location</dt><dd>{range}</dd>
-          <dt>Kind</dt><dd>{evidence.kind.replaceAll("_", " ")}</dd>
+          <dt>Kind</dt><dd>{evidence.kind === "knowledge" ? "cited excerpt" : evidence.kind.replaceAll("_", " ")}</dd>
+          {evidence.heading && <><dt>Section</dt><dd>{evidence.heading}</dd></>}
           <dt>Pinned commit</dt><dd><code>{evidence.repository_sha}</code></dd>
           <dt>Extractor</dt><dd>{evidence.extractor_version}</dd>
           <dt>Observed</dt><dd>{formatTime(evidence.observed_at)}</dd>
         </dl>
-        <a className="button button-secondary" href={`${repository.clone_url.replace(/\.git$/, "")}/blob/${evidence.repository_sha}/${evidence.path}${lineAnchor}`} rel="noreferrer" target="_blank">
+        {evidence.excerpt && (
+          <pre className="evidence-excerpt" tabIndex={0} aria-label="Cited excerpt">{evidence.excerpt}</pre>
+        )}
+        <a className="button button-secondary" href={`${repository.clone_url.replace(/\.git$/, "")}/blob/${evidence.repository_sha}/${sourcePath}${plain}${lineAnchor}`} rel="noreferrer" target="_blank">
           View source at this commit
         </a>
       </>

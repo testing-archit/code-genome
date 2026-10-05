@@ -40,7 +40,13 @@ function ChangeView() {
   const [result, setResult] = useState<ChangeImpact | null>(null);
 
   const listedPaths = paths.split("\n").map((line) => line.trim()).filter(Boolean);
-  const canSubmit = !working && (diff.trim().length > 0 || listedPaths.length > 0);
+  const tooLarge =
+    new Blob([diff]).size > 900_000
+      ? "The diff is larger than 900 KB. Check a smaller range of commits, or list the changed paths instead."
+      : listedPaths.length > 200
+        ? `Checks are limited to 200 paths; ${listedPaths.length} are listed.`
+        : null;
+  const canSubmit = !working && !tooLarge && (diff.trim().length > 0 || listedPaths.length > 0);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,6 +82,7 @@ function ChangeView() {
             Or file paths, one per line
             <textarea className="textarea" onChange={(event) => setPaths(event.target.value)} placeholder="src/billing/invoice.ts" rows={4} spellCheck={false} value={paths} />
           </label>
+          {tooLarge && <Notice tone="warn">{tooLarge}</Notice>}
           {error && <Notice tone="error" title="Check failed">{error}</Notice>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="button button-primary" disabled={!canSubmit} type="submit">{working ? "Checking…" : "Check impact"}</button>

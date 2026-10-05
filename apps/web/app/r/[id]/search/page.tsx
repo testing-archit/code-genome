@@ -11,6 +11,8 @@ import { api, errorMessage } from "../../../../lib/api";
 
 const kinds = [
   { value: "", label: "Everything" },
+  { value: "doc", label: "Docs" },
+  { value: "code", label: "Code" },
   { value: "file", label: "Files" },
   { value: "commit", label: "Commits" },
   { value: "module", label: "Modules" },
@@ -59,7 +61,7 @@ function SearchView() {
           <div className="composer-box">
             <SearchIcon />
             <label className="sr-only" htmlFor="repo-search">Search</label>
-            <input autoFocus id="repo-search" onChange={(event) => setQuery(event.target.value)} placeholder="What are you looking for?" style={{ flex: 1, border: 0, outline: "none", background: "none", minHeight: 36 }} value={query} />
+            <input autoFocus id="repo-search" maxLength={500} onChange={(event) => setQuery(event.target.value)} placeholder="What are you looking for?" style={{ flex: 1, border: 0, outline: "none", background: "none", minHeight: 36 }} value={query} />
             <button className="button button-primary" disabled={loading || query.trim().length < 2} type="submit">{loading ? "Searching…" : "Search"}</button>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>

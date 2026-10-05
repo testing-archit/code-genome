@@ -76,11 +76,7 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
     } catch {
       // Non-JSON error bodies fall back to the status text.
     }
-    throw new ApiError(
-      problem.detail || response.statusText || "The API request failed.",
-      response.status,
-      problem.code ?? null,
-    );
+    throw new ApiError(describeProblem(problem, response), response.status, problem.code ?? null);
   }
   return response;
 }
@@ -98,6 +94,22 @@ function saveBlob(blob: Blob, filename: string) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+type FieldError = { location?: Array<string | number>; message?: string };
+
+/** Turn an RFC 9457 problem into a sentence that names the rejected field. */
+function describeProblem(problem: Partial<ProblemDetail> & { errors?: FieldError[] }, response: Response): string {
+  const detail = problem.detail || response.statusText || "The API request failed.";
+  if (response.status === 413) return "That is too large to send. Shorten it and try again.";
+  if (response.status === 429) return "Too many requests in the last minute. Wait a moment and try again.";
+  if (!Array.isArray(problem.errors) || problem.errors.length === 0) return detail;
+  const fields = problem.errors.slice(0, 3).map((error) => {
+    const field = (error.location ?? []).filter((part) => part !== "body" && part !== "query").join(".");
+    const message = (error.message ?? "is invalid").replace(/^Value error, /, "");
+    return field ? `${field}: ${message}` : message;
+  });
+  return `${detail} ${fields.join("; ")}`;
 }
 
 export const api = {
@@ -288,11 +300,11 @@ export const api = {
 
   listAuditEvents: (limit = 200) =>
     request<AuditEventRecord[]>(
-      `/audit-events?${new URLSearchParams({ workspace_id: workspaceId, format: "json", limit: String(limit) })}`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/audit-events?${new URLSearchParams({ format: "json", limit: String(limit) })}`,
     ),
   downloadAuditCsv: async () => {
     const response = await send(
-      `/audit-events?${new URLSearchParams({ workspace_id: workspaceId, format: "csv" })}`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/audit-events?${new URLSearchParams({ format: "csv" })}`,
     );
     saveBlob(await response.blob(), `audit-${workspaceId}.csv`);
   },

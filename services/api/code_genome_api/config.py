@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
     retention_days: int = 365
-    rate_limit_per_minute: int = 120
+    rate_limit_per_minute: int = 600
     max_request_bytes: int = 1_000_000
     gemini_api_key: SecretStr | None = Field(
         default=None,

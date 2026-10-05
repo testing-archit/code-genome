@@ -111,6 +111,11 @@ function Chat() {
     async (text: string) => {
       const question = text.trim();
       if (question.length < 2 || pending) return;
+      if (question.length > 2000) {
+        setError(`Questions are limited to 2,000 characters; this one has ${question.length.toLocaleString()}.`);
+        setDraft(question);
+        return;
+      }
       setError(null);
       setPending({ question, draft: "", model: null, replaced: false });
       setDraft("");

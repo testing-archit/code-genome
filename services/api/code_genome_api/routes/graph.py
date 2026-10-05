@@ -10,6 +10,7 @@ from ..errors import AppError
 from ..models import (
     GraphEdge,
     GraphNode,
+    KnowledgeChunkRecord,
     ParseDiagnostic,
     Provenance,
     Repository,
@@ -189,7 +190,20 @@ def get_evidence(evidence_id: str, db: Database, actor: Actor) -> EvidenceRespon
     )
     if item is None:
         raise AppError(404, "NOT_FOUND", "Resource not found", "Evidence was not found.")
+    # Knowledge evidence carries its stored, redacted excerpt so the cited text is visible.
+    chunk = (
+        db.scalar(
+            select(KnowledgeChunkRecord).where(
+                KnowledgeChunkRecord.provenance_id == item.id,
+                KnowledgeChunkRecord.workspace_id == actor.workspace_id,
+            )
+        )
+        if item.kind == "knowledge"
+        else None
+    )
     return EvidenceResponse(
+        heading=chunk.heading or None if chunk else None,
+        excerpt=chunk.text if chunk else None,
         id=item.id,
         kind=item.kind,
         repository_sha=item.repository_sha,
