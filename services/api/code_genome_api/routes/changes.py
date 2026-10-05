@@ -116,7 +116,10 @@ def check_change_impact(
             existing.evidence_ids.extend(
                 e for e in neighbour.evidence_ids if e not in existing.evidence_ids
             )
-    impacted = sorted(aggregated.values(), key=lambda entry: (-entry.score, entry.path))
+    impacted = sorted(
+        aggregated.values(),
+        key=lambda entry: (-entry.score, -(entry.weighted_score or 0.0), entry.path),
+    )
 
     changed: list[ChangedFileResponse] = []
     for item in changes:

@@ -476,8 +476,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .repo-card { display: grid; gap: 14px; padding: 18px; text-decoration: none; color: inherit; transition: border-color 0.15s; }
 .repo-card:hover { border-color: var(--hema); }
 .repo-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
-.capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--radius-l); overflow: hidden; }
-.capability { background: var(--glass); padding: 18px; display: grid; gap: 6px; align-content: start; }
+.capabilities { display: flex; flex-wrap: wrap; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--radius-l); overflow: hidden; }
+/* Flex rows let a short last row stretch instead of leaving empty, rule-coloured cells. */
+.capability { flex: 1 1 220px; background: var(--glass); padding: 18px; display: grid; gap: 6px; align-content: start; }
 .capability svg { color: var(--hema); }
 .capability p { color: var(--fixative); font-size: 13.5px; }
 

@@ -299,6 +299,14 @@ def test_change_impact_ranks_neighbours_with_evidence(
         )
         db.commit()
 
+    single = client.get(
+        f"/api/v1/repositories/{repository_id}/impact",
+        headers=auth(),
+        params={"path": "src/billing.ts"},
+    )
+    assert single.status_code == 200
+    assert all(not item["path"].startswith("external:") for item in single.json()["impacted"])
+
     response = client.post(
         f"/api/v1/repositories/{repository_id}/impact/change",
         headers=auth(),

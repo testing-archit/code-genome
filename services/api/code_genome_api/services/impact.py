@@ -211,5 +211,10 @@ def impact_for_paths(
                     pagerank_percentile=round(prepared.pagerank_percentile[item.path], 4),
                     betweenness=round(min(1.0, prepared.betweenness.get(item.path, 0.0)), 6),
                 )
-        results[path] = sorted(impacted.values(), key=lambda item: (-item.score, item.path))
+        # Package nodes such as `external:react` are dependencies, not files that can break.
+        # Many direct imports share score 1.0, so the weighted score breaks ties.
+        results[path] = sorted(
+            (item for item in impacted.values() if not item.path.startswith("external:")),
+            key=lambda item: (-item.score, -(item.weighted_score or 0.0), item.path),
+        )
     return results, limitations

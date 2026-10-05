@@ -50,19 +50,27 @@ function ArchitectureView() {
         </Panel>
 
         <div style={{ display: "grid", gap: 20 }}>
-          <Panel title="Changes together" description="File pairs that repeatedly change in the same commits." flush>
+          <Panel title="Changes together" description="File pairs that repeatedly change in the same commits. The score is co-change confidence: how often the second file changes when the first does." flush>
             {data.co_changes.length === 0 ? <Empty title="No repeated pairs">No two files changed together often enough.</Empty> : (
               <div className="list">
-                {data.co_changes.slice(0, 12).map((edge) => (
-                  <div className="list-row" key={`${edge.left_path}:${edge.right_path}`}>
-                    <div className="grow">
-                      <div className="truncate small"><Link href={`/r/${repository.id}/files?path=${encodeURIComponent(edge.left_path)}`}>{nodeTitle(edge.left_path)}</Link> and <Link href={`/r/${repository.id}/files?path=${encodeURIComponent(edge.right_path)}`}>{nodeTitle(edge.right_path)}</Link></div>
-                      <small>{edge.commit_count} shared commits</small>
+                {[...data.co_changes].sort((a, b) => b.commit_count - a.commit_count).slice(0, 12).map((edge) => {
+                  // Two different files can share a name (test/hooks.ts, source/types/hooks.ts).
+                  const same = nodeTitle(edge.left_path) === nodeTitle(edge.right_path);
+                  const label = (path: string) => (same ? path.split("/").slice(-2).join("/") : nodeTitle(path));
+                  return (
+                    <div className="list-row" key={`${edge.left_path}:${edge.right_path}`}>
+                      <div className="grow">
+                        <div className="truncate small">
+                          <Link href={`/r/${repository.id}/files?path=${encodeURIComponent(edge.left_path)}`} title={edge.left_path}>{label(edge.left_path)}</Link> and{" "}
+                          <Link href={`/r/${repository.id}/files?path=${encodeURIComponent(edge.right_path)}`} title={edge.right_path}>{label(edge.right_path)}</Link>
+                        </div>
+                        <small>{edge.commit_count} shared commits</small>
+                      </div>
+                      <Meter value={edge.confidence} />
+                      <span className="score" title="Co-change confidence">{Math.round(edge.confidence * 100)}%</span>
                     </div>
-                    <Meter value={edge.confidence} />
-                    <span className="score">{Math.round(edge.confidence * 100)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Panel>

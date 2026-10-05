@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Keep the dev-tools badge off the sidebar footer.
+  devIndicators: { position: "bottom-right" },
   transpilePackages: ["@code-genome/contracts"],
   async headers() {
     return [
