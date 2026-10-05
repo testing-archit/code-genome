@@ -10,13 +10,22 @@ from .defect import FEATURE_LABELS as DEFECT_FEATURE_LABELS
 from .defect import train_defect_model
 from .impact import FEATURE_LABELS as IMPACT_FEATURE_LABELS
 from .impact import train_link_model
+from .instability import train_instability_model
 from .intent import train_intent_classifier
 from .modules import discover_modules
 from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, SearchDocument
 from .retrieval import MODEL_VERSION as RETRIEVAL_VERSION
 from .retrieval import evaluate_retrieval
 
-TASKS = ("commit_intent", "defect_risk", "change_impact", "retrieval", "modules", "anomalies")
+TASKS = (
+    "commit_intent",
+    "defect_risk",
+    "change_impact",
+    "retrieval",
+    "modules",
+    "anomalies",
+    "instability",
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +70,13 @@ def train_all(inputs: TrainingInputs) -> dict[str, dict[str, Any]]:
     payload["training_seconds"] = seconds
     payload["feature_labels"] = DEFECT_FEATURE_LABELS
     results["defect_risk"] = payload
+
+    instability, seconds = _timed(
+        train_instability_model, inputs.commits, inputs.changes, fix_shas, inputs.files
+    )
+    payload = asdict(instability)
+    payload["training_seconds"] = seconds
+    results["instability"] = payload
 
     link, seconds = _timed(train_link_model, inputs.changes, inputs.imports, len(inputs.files))
     payload = asdict(link)

@@ -13,21 +13,32 @@ Timeline (commit-ordered quantiles):
 * Test set:  features from [0, t2), labels from [t2, end]
 * Deployment: model refit on train and test sets, applied to features from [0, end]
 
-Champion/challenger: an L2 logistic regression and a gradient-boosted tree ensemble are
-both scored on the test period against the transparent heuristic baseline. The champion
-is chosen by average precision. Per-file explanations come from the logistic model:
-coefficient × standardised feature value, which is an exact additive decomposition of
-its log-odds.
+Champion/challenger: an L2 logistic regression, a random forest, and a gradient-boosted
+tree ensemble are all scored on the test period against the transparent heuristic
+baseline. The champion is chosen by average precision (ties favour the simpler model).
+
+Per-file explanations always describe the *champion*, and the result records which
+method produced them (``contribution_method``):
+
+* logistic regression: coefficient × standardised feature value, an exact additive
+  decomposition of the log-odds (unit: log-odds).
+* tree ensembles (random forest, gradient boosting): a local "reset to typical" attribution.
+  For each feature, the champion is re-scored with only that feature replaced by its
+  median over the labelled files; the contribution is the predicted probability minus
+  that re-scored probability (unit: probability points). It shows how much this file's
+  value of the feature moves its own prediction. It is not additive: interactions mean
+  the values need not sum to the probability.
 """
 
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 from sklearn.calibration import calibration_curve
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
@@ -36,7 +47,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, bulk_commit_shas
 
-MODEL_VERSION = "defect-temporal@1"
+MODEL_VERSION = "defect-temporal@2"
 RANDOM_STATE = 7
 MIN_COMMITS = 24
 MIN_CLASS = 3
@@ -91,6 +102,8 @@ class DefectResult:
     importance: list[tuple[str, float]] = field(default_factory=list)
     calibration: dict[str, list[float]] = field(default_factory=dict)
     predictions: list[FilePrediction] = field(default_factory=list)
+    contribution_method: str | None = None
+    contribution_unit: str | None = None
 
 
 class _History:
@@ -205,6 +218,59 @@ def _boosting() -> HistGradientBoostingClassifier:
     )
 
 
+def _forest() -> RandomForestClassifier:
+    return RandomForestClassifier(
+        n_estimators=300,
+        max_depth=8,
+        min_samples_leaf=3,
+        max_features="sqrt",
+        class_weight="balanced",
+        n_jobs=1,
+        random_state=RANDOM_STATE,
+    )
+
+
+# scikit-learn is untyped; candidates share fit/predict_proba.
+Candidate = Any
+CANDIDATES = ("logistic_regression", "random_forest", "gradient_boosting")
+# Tie-break order: prefer the more transparent model when average precision is equal.
+_SIMPLICITY = {"logistic_regression": 2, "random_forest": 1, "gradient_boosting": 0}
+
+CONTRIBUTION_METHODS: dict[str, tuple[str, str]] = {
+    "logistic_regression": (
+        "Logistic-regression coefficient × standardised feature value: an exact additive "
+        "decomposition of the model's log-odds.",
+        "log-odds",
+    ),
+    "tree_ensemble": (
+        "Local reset-to-typical attribution: the champion's probability for this file minus "
+        "its probability with only that feature set to the median of the labelled files. "
+        "Values are not additive across features.",
+        "probability",
+    ),
+}
+
+
+def _build(name: str) -> Candidate:
+    if name == "logistic_regression":
+        return _logistic()
+    if name == "random_forest":
+        return _forest()
+    return _boosting()
+
+
+def _reset_contributions(model: Candidate, x_now: np.ndarray, typical: np.ndarray) -> np.ndarray:
+    """Probability change when each feature alone is reset to its typical (median) value."""
+    rows, columns = x_now.shape
+    base = model.predict_proba(x_now)[:, 1]
+    stacked = np.repeat(x_now[np.newaxis, :, :], columns, axis=0)
+    for column in range(columns):
+        stacked[column, :, column] = typical[column]
+    reset = model.predict_proba(stacked.reshape(columns * rows, columns))[:, 1]
+    result: np.ndarray = base[:, np.newaxis] - reset.reshape(columns, rows).T
+    return result
+
+
 def _score(truth: np.ndarray, scores: np.ndarray) -> dict[str, float]:
     k = max(1, math.ceil(len(truth) * 0.2))
     top = np.argsort(-scores)[:k]
@@ -273,7 +339,7 @@ def train_defect_model(
             dataset,
         )
 
-    candidates = {"logistic_regression": _logistic(), "gradient_boosting": _boosting()}
+    candidates = {name: _build(name) for name in CANDIDATES}
     for model in candidates.values():
         model.fit(x_train, y_train)
 
@@ -291,7 +357,7 @@ def train_defect_model(
             metrics[name] = scores
         champion = max(
             candidates,
-            key=lambda name: (metrics[name]["average_precision"], name == "logistic_regression"),  # type: ignore[index]
+            key=lambda name: (metrics[name]["average_precision"], _SIMPLICITY[name]),  # type: ignore[index]
         )
         champion_probabilities = candidates[champion].predict_proba(x_test)[:, 1]
         bins = min(5, max(2, int(y_test.sum())))
@@ -324,14 +390,18 @@ def train_defect_model(
     # Deployment model: refit the champion on both labelled periods.
     x_all = np.vstack([x_train, x_test])
     y_all = np.concatenate([y_train, y_test])
-    final = _logistic() if champion == "logistic_regression" else _boosting()
+    final = _build(champion)
     final.fit(x_all, y_all)
-    explainer = _logistic().fit(x_all, y_all)
     x_now = _features(paths, history, None, sizes, fan_in, fan_out)
     probabilities = final.predict_proba(x_now)[:, 1]
-    scaler: StandardScaler = explainer.named_steps["scale"]
-    coefficients = explainer.named_steps["model"].coef_[0]
-    contributions = scaler.transform(x_now) * coefficients
+    if isinstance(final, Pipeline):
+        scaler: StandardScaler = final.named_steps["scale"]
+        coefficients = final.named_steps["model"].coef_[0]
+        contributions = scaler.transform(x_now) * coefficients
+        method, unit = CONTRIBUTION_METHODS["logistic_regression"]
+    else:
+        contributions = _reset_contributions(final, x_now, np.median(x_all, axis=0))
+        method, unit = CONTRIBUTION_METHODS["tree_ensemble"]
     high, medium = (
         np.quantile(probabilities, [0.9, 0.6]) if len(probabilities) >= 5 else (0.66, 0.33)
     )
@@ -377,4 +447,6 @@ def train_defect_model(
         importance=importance,
         calibration=calibration,
         predictions=predictions,
+        contribution_method=method,
+        contribution_unit=unit,
     )

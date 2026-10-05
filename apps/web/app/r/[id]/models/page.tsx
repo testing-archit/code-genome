@@ -1,6 +1,6 @@
 "use client";
 
-import type { MlOverview } from "@code-genome/contracts";
+import type { DefectChampion, MlOverviewWithInstability } from "@code-genome/contracts";
 import Link from "next/link";
 
 import {
@@ -36,7 +36,7 @@ function ModelsView() {
   if (models.error) return <Notice tone="error" title="Models could not be loaded">{models.error}</Notice>;
   if (!models.data) return <Panel><Loading rows={5} /></Panel>;
 
-  const overview = models.data;
+  const overview: MlOverviewWithInstability = models.data;
   const trainedAt = Object.values(overview.tasks)[0]?.trained_at;
 
   return (
@@ -46,7 +46,7 @@ function ModelsView() {
         description={
           overview.trained
             ? <>Trained {relativeTime(trainedAt)} on snapshot <code>{shortSha(published?.snapshot_sha, 10)}</code>. Each model is evaluated on data it did not see: a later time period or cross-validation folds.</>
-            : "Train six models from this repository's own commits, files, and import graph. It takes a few seconds."
+            : "Train seven models from this repository's own commits, files, and import graph. It takes a few seconds."
         }
         actions={
           <button className={`button ${overview.trained ? "button-secondary" : "button-primary"}`} disabled={training} onClick={() => void trainModels()} type="button">
@@ -65,6 +65,7 @@ function ModelsView() {
         <>
           <SummaryCards overview={overview} />
           <DefectSection overview={overview} />
+          <InstabilitySection overview={overview} />
           <IntentSection overview={overview} />
           <div className="grid-2">
             <ImpactSection overview={overview} />
@@ -81,14 +82,15 @@ function ModelsView() {
   );
 }
 
-function SummaryCards({ overview }: { overview: MlOverview }) {
-  const { defect_risk: defect, commit_intent: intent, change_impact: link, retrieval, modules, anomalies } = overview.tasks;
+function SummaryCards({ overview }: { overview: MlOverviewWithInstability }) {
+  const { defect_risk: defect, commit_intent: intent, change_impact: link, retrieval, modules, anomalies, instability } = overview.tasks;
+  const instabilityScores = instability?.result.metrics.model;
   const champion = defect?.result.champion;
   const championScores = champion ? defect?.result.metrics[champion] : undefined;
   const cards = [
     {
       title: "Defect-proneness",
-      algo: champion === "gradient_boosting" ? "Gradient boosting" : "Logistic regression",
+      algo: championName(champion, true),
       trained: defect?.status === "trained",
       headline: championScores ? championScores.roc_auc.toFixed(2) : "—",
       unit: "ROC-AUC on the latest period",
@@ -134,6 +136,16 @@ function SummaryCards({ overview }: { overview: MlOverview }) {
       unit: `flagged of ${anomalies?.result.metrics.commits ?? "—"} commits`,
       versus: anomalies?.status === "trained" ? "Unusual is a prompt to review, not a finding" : anomalies?.result.reason,
     },
+    {
+      title: "Component instability",
+      algo: "Windowed sequence model, logistic regression",
+      trained: instability?.status === "trained",
+      headline: instabilityScores ? instabilityScores.average_precision.toFixed(2) : "—",
+      unit: "average precision on later periods",
+      versus: instability?.result.metrics.baseline_persistence
+        ? `Persistence baseline ${instability.result.metrics.baseline_persistence.average_precision.toFixed(2)}`
+        : instability?.result.reason ?? instability?.result.metrics.note,
+    },
   ];
   return (
     <div className="model-cards">
@@ -152,7 +164,20 @@ function SummaryCards({ overview }: { overview: MlOverview }) {
   );
 }
 
-function DefectSection({ overview }: { overview: MlOverview }) {
+const CHAMPION_NAMES: Record<DefectChampion, string> = {
+  logistic_regression: "logistic regression",
+  random_forest: "random forest",
+  gradient_boosting: "gradient boosting",
+};
+
+function championName(champion: DefectChampion | null | undefined, capitalised = false) {
+  const name = CHAMPION_NAMES[champion ?? "logistic_regression"];
+  return capitalised ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+}
+
+const forestSeries = { key: "forest", label: "Random forest", color: "var(--warn)" };
+
+function DefectSection({ overview }: { overview: MlOverviewWithInstability }) {
   const { repository } = useRepo();
   const task = overview.tasks.defect_risk;
   if (!task) return null;
@@ -184,15 +209,16 @@ function DefectSection({ overview }: { overview: MlOverview }) {
               <h3>Champion and challenger against the baseline</h3>
               {result.metrics.logistic_regression ? (
                 <MetricBars
-                  caption={`Champion: ${result.champion === "gradient_boosting" ? "gradient boosting" : "logistic regression"}, chosen by average precision. Test base rate ${(result.metrics.test_base_rate ?? 0).toFixed(2)}.`}
+                  caption={`Champion: ${championName(result.champion)}, chosen by average precision. Test base rate ${(result.metrics.test_base_rate ?? 0).toFixed(2)}.`}
                   groups={[
-                    { label: "ROC-AUC", values: { baseline: result.metrics.heuristic_baseline?.roc_auc, model: result.metrics.logistic_regression?.roc_auc, challenger: result.metrics.gradient_boosting?.roc_auc } },
-                    { label: "Average precision", values: { baseline: result.metrics.heuristic_baseline?.average_precision, model: result.metrics.logistic_regression?.average_precision, challenger: result.metrics.gradient_boosting?.average_precision } },
-                    { label: "Precision in top 20%", values: { baseline: result.metrics.heuristic_baseline?.precision_at_top20pct, model: result.metrics.logistic_regression?.precision_at_top20pct, challenger: result.metrics.gradient_boosting?.precision_at_top20pct } },
+                    { label: "ROC-AUC", values: { baseline: result.metrics.heuristic_baseline?.roc_auc, model: result.metrics.logistic_regression?.roc_auc, forest: result.metrics.random_forest?.roc_auc, challenger: result.metrics.gradient_boosting?.roc_auc } },
+                    { label: "Average precision", values: { baseline: result.metrics.heuristic_baseline?.average_precision, model: result.metrics.logistic_regression?.average_precision, forest: result.metrics.random_forest?.average_precision, challenger: result.metrics.gradient_boosting?.average_precision } },
+                    { label: "Precision in top 20%", values: { baseline: result.metrics.heuristic_baseline?.precision_at_top20pct, model: result.metrics.logistic_regression?.precision_at_top20pct, forest: result.metrics.random_forest?.precision_at_top20pct, challenger: result.metrics.gradient_boosting?.precision_at_top20pct } },
                   ]}
                   series={[
                     { ...baselineSeries, label: "Heuristic baseline" },
                     { ...modelSeries, label: "Logistic regression" },
+                    ...(result.metrics.random_forest ? [forestSeries] : []),
                     { ...challengerSeries, label: "Gradient boosting" },
                   ]}
                 />
@@ -217,6 +243,7 @@ function DefectSection({ overview }: { overview: MlOverview }) {
             )}
             <div style={{ display: "grid", gap: 10 }}>
               <h3>Highest predicted risk</h3>
+              {result.contribution_method && <p className="muted small">Factors: {result.contribution_method}</p>}
               <div className="list" style={{ margin: "0 -20px" }}>
                 {result.predictions.slice(0, 6).map((item) => (
                   <Link className="list-row" href={`/r/${repository.id}/files?path=${encodeURIComponent(item.path)}`} key={item.path}>
@@ -238,7 +265,7 @@ function DefectSection({ overview }: { overview: MlOverview }) {
   );
 }
 
-function IntentSection({ overview }: { overview: MlOverview }) {
+function IntentSection({ overview }: { overview: MlOverviewWithInstability }) {
   const task = overview.tasks.commit_intent;
   if (!task) return null;
   const result = task.result;
@@ -283,7 +310,7 @@ function IntentSection({ overview }: { overview: MlOverview }) {
   );
 }
 
-function ImpactSection({ overview }: { overview: MlOverview }) {
+function ImpactSection({ overview }: { overview: MlOverviewWithInstability }) {
   const task = overview.tasks.change_impact;
   if (!task) return null;
   const result = task.result;
@@ -309,7 +336,7 @@ function ImpactSection({ overview }: { overview: MlOverview }) {
   );
 }
 
-function RetrievalSection({ overview }: { overview: MlOverview }) {
+function RetrievalSection({ overview }: { overview: MlOverviewWithInstability }) {
   const { repository } = useRepo();
   const task = overview.tasks.retrieval;
   if (!task) return null;
@@ -334,7 +361,7 @@ function RetrievalSection({ overview }: { overview: MlOverview }) {
   );
 }
 
-function ModulesSection({ overview }: { overview: MlOverview }) {
+function ModulesSection({ overview }: { overview: MlOverviewWithInstability }) {
   const task = overview.tasks.modules;
   if (!task) return null;
   const result = task.result;
@@ -364,7 +391,7 @@ function ModulesSection({ overview }: { overview: MlOverview }) {
   );
 }
 
-function AnomalySection({ overview }: { overview: MlOverview }) {
+function AnomalySection({ overview }: { overview: MlOverviewWithInstability }) {
   const { inventory } = useRepo();
   const task = overview.tasks.anomalies;
   if (!task) return null;
@@ -387,5 +414,79 @@ function AnomalySection({ overview }: { overview: MlOverview }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+function InstabilitySection({ overview }: { overview: MlOverviewWithInstability }) {
+  const { repository } = useRepo();
+  const task = overview.tasks.instability;
+  if (!task) return null;
+  const result = task.result;
+  const { dataset, metrics } = result;
+  const weekly = dataset.period_kind === "week";
+  const period = weekly ? "week" : `window of ${dataset.period_size ?? "?"} commits`;
+  const labels = result.feature_labels;
+  return (
+    <Panel
+      title="Component instability forecast"
+      description={`Which components (directories) will a bug-fix commit touch next ${weekly ? "week" : "period"}? A logistic regression reads each component's last ${dataset.window ?? 4} periods of commits, fixes, churn, and authors: a windowed sequence model, not a recurrent network. Forecasts are inferred, not findings.`}
+    >
+      {task.status !== "trained" ? <Abstained reason={result.reason} /> : (
+        <div className="grid-2">
+          <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+            <h3>Held-out later periods against baselines</h3>
+            {metrics.model ? (
+              <MetricBars
+                caption={`One period is a ${period}; ${dataset.periods} periods, ${dataset.components} components. Scored on ${dataset.test_samples} component-periods${dataset.test_period?.[0] ? ` from ${formatDate(dataset.test_period[0])} on` : ""} (base rate ${(metrics.test_base_rate ?? 0).toFixed(2)}), never seen in training. Persistence predicts that the next period repeats this one.`}
+                groups={[
+                  { label: "ROC-AUC", values: { baseline: metrics.baseline_persistence?.roc_auc, challenger: metrics.baseline_historical_rate?.roc_auc, model: metrics.model.roc_auc } },
+                  { label: "Average precision", values: { baseline: metrics.baseline_persistence?.average_precision, challenger: metrics.baseline_historical_rate?.average_precision, model: metrics.model.average_precision } },
+                  { label: "F1", values: { baseline: metrics.baseline_persistence?.f1, challenger: metrics.baseline_historical_rate?.f1, model: metrics.model.f1 } },
+                ]}
+                series={[{ ...baselineSeries, label: "Persistence" }, { ...challengerSeries, label: "Historical fix rate" }, { ...modelSeries, label: "Windowed model" }]}
+              />
+            ) : <Notice>{metrics.note}</Notice>}
+          </div>
+          <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+            <h3>Most likely to need a fix next {weekly ? "week" : "period"}</h3>
+            <p className="muted small">Bars show commits in each of the last {dataset.window ?? 4} periods (fixes in red). Factors are log-odds contributions.</p>
+            <div className="list" style={{ margin: "0 -20px" }}>
+              {result.predictions.slice(0, 6).map((item) => (
+                <div className="list-row" key={item.component} style={{ alignItems: "flex-start" }}>
+                  <div className="grow" style={{ display: "grid", gap: 4 }}>
+                    <code className="truncate" style={{ display: "block" }}>{item.component}</code>
+                    <small>
+                      {item.files} files{item.fixed_last_period ? " · fixed in the latest period" : ""}
+                      {item.contributions.length > 0 && ` · ${item.contributions.slice(0, 2).map(([name, value]) => `${labels[name] ?? name} ${value >= 0 ? "+" : ""}${value.toFixed(2)}`).join(", ")}`}
+                    </small>
+                    {item.evidence_shas.length > 0 && <EvidenceChips ids={item.evidence_shas.slice(0, 3).map((sha) => `commit:${sha}`)} />}
+                  </div>
+                  <ActivitySequence periods={item.recent_periods} />
+                  <span className={`badge ${item.band === "high" ? "badge-eosin" : item.band === "medium" ? "badge-warn" : ""}`}>{item.band}</span>
+                  <span className="score" title="Inferred probability">{Math.round(item.probability * 100)}%</span>
+                </div>
+              ))}
+            </div>
+            <Link className="button button-secondary button-small" href={`/r/${repository.id}/risk`} style={{ justifySelf: "start" }}>File-level risk ranking</Link>
+            <p className="muted small">Label: a commit the intent model classified as a fix touches the component in the next period. A forecast is a prompt to review, not proof of a defect.</p>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function ActivitySequence({ periods }: { periods: Array<[number, number]> }) {
+  const peak = Math.max(1, ...periods.map(([other, fixes]) => other + fixes));
+  const summary = periods.map(([other, fixes]) => `${other + fixes} commits, ${fixes} fixes`).join("; ");
+  return (
+    <span aria-label={`Recent periods, oldest first: ${summary}`} role="img" style={{ display: "inline-flex", alignItems: "flex-end", gap: 2, height: 24 }} title={summary}>
+      {periods.map(([other, fixes], index) => (
+        <span key={index} style={{ display: "inline-flex", flexDirection: "column-reverse", width: 6, height: 24, borderBottom: "2px solid var(--chart-baseline)" }}>
+          <span style={{ height: `${(fixes / peak) * 100}%`, background: "var(--chart-challenger)" }} />
+          <span style={{ height: `${(other / peak) * 100}%`, background: "var(--chart-model)" }} />
+        </span>
+      ))}
+    </span>
   );
 }

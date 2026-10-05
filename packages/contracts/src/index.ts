@@ -585,3 +585,83 @@ export type GeneratedDocuments = {
   generated_at: string;
   documents: Array<{ name: string; description: string; markdown: string }>;
 };
+
+// ---- Defect model v2 (random-forest candidate) and component instability forecasting.
+
+export type DefectChampion = "logistic_regression" | "random_forest" | "gradient_boosting";
+
+/** defect-temporal@2: adds a random-forest candidate and states how contributions are computed. */
+export type DefectResultV2 = Omit<DefectResult, "champion" | "metrics"> & {
+  champion: DefectChampion | null;
+  metrics: DefectResult["metrics"] & { random_forest?: Scores };
+  /** What `predictions[*].contributions` mean for the chosen champion. */
+  contribution_method?: string | null;
+  contribution_unit?: "log-odds" | "probability" | null;
+};
+
+type InstabilityScores = { roc_auc: number; average_precision: number; brier: number; precision: number; recall: number; f1: number };
+
+/** instability-windowed-logreg@1: logistic regression over the last `window` periods (not a recurrent network). */
+export type InstabilityResult = {
+  model_version: string;
+  status: MlStatus;
+  reason: string | null;
+  dataset: Record<string, unknown> & {
+    period_kind?: "week" | "commit_window";
+    period_size?: number;
+    periods?: number;
+    window?: number;
+    components?: number;
+    label?: string;
+    train_samples?: number;
+    test_samples?: number;
+    train_positive?: number;
+    test_positive?: number;
+    train_period?: string[];
+    test_period?: string[];
+    forecast_after?: string;
+    bulk_commits_excluded?: number;
+  };
+  metrics: {
+    threshold?: number;
+    model?: InstabilityScores;
+    baseline_persistence?: InstabilityScores;
+    baseline_historical_rate?: InstabilityScores;
+    test_base_rate?: number;
+    note?: string;
+  };
+  coefficients: Array<[string, number]>;
+  predictions: Array<{
+    component: string;
+    probability: number;
+    band: "high" | "medium" | "low";
+    files: number;
+    /** [non-fix commits, bug-fix commits] per period, oldest to newest. */
+    recent_periods: Array<[number, number]>;
+    fixed_last_period: boolean;
+    contributions: Array<[string, number]>;
+    evidence_shas: string[];
+  }>;
+  feature_labels: Record<string, string>;
+  contribution_method: string;
+  training_seconds: number;
+};
+
+export type MlOverviewWithInstability = Omit<MlOverview, "tasks"> & {
+  tasks: Omit<MlOverview["tasks"], "defect_risk"> &
+    Partial<{ defect_risk: Task<DefectResultV2>; instability: Task<InstabilityResult> }>;
+};
+
+/** Inferred forecast returned by GET /repositories/{id}/overview as `unstable_components`. */
+export type UnstableComponent = {
+  name: string;
+  probability: number;
+  band: "high" | "medium" | "low";
+  files: number;
+  fixed_last_period: boolean;
+  evidence_ids: string[];
+  model_version: string;
+};
+
+/** Optional overview field: null when the instability model is untrained or abstained. */
+export type RepositoryOverviewInstability = { unstable_components?: UnstableComponent[] | null };

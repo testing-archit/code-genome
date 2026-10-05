@@ -20,8 +20,9 @@ from ..schemas import (
     OverviewFileRisk,
     RepositoryHealthResponse,
     RepositoryOverviewResponse,
+    UnstableComponentResponse,
 )
-from ..services import insights
+from ..services import insights, ml
 from ..services.knowledge import classify
 from .intelligence import _repository, _snapshot, get_risk
 
@@ -32,7 +33,7 @@ def _facts(db: Database, repository_id: str, actor: Actor) -> insights.SnapshotF
     repository = _repository(db, repository_id, actor)
     snapshot = _snapshot(db, repository_id, actor)
     risk = get_risk(repository_id, db, actor)
-    return insights.load_facts(
+    facts = insights.load_facts(
         db,
         snapshot,
         repository.external_id,
@@ -42,6 +43,10 @@ def _facts(db: Database, repository_id: str, actor: Actor) -> insights.SnapshotF
         },
         risk.scores[0].model_version if risk.scores else "none",
     )
+    facts.instability, facts.instability_model = insights.instability_facts(
+        ml.trained_result(db, snapshot, "instability")
+    )
+    return facts
 
 
 @router.get("/repositories/{repository_id}/overview", response_model=RepositoryOverviewResponse)
@@ -121,7 +126,30 @@ def get_overview(repository_id: str, db: Database, actor: Actor) -> RepositoryOv
             f"Contributors and commits cover the {len(facts.commits)} most recent analysed "
             "commits, not the full history.",
             "Module risk is the mean risk of each inferred module's three riskiest files.",
+            *(
+                [
+                    f"Unstable components are an inferred forecast ({facts.instability_model}): "
+                    "the probability that a bug-fix commit touches the component next period, "
+                    "learned from its recent activity. Not proof of a defect."
+                ]
+                if facts.instability
+                else []
+            ),
         ],
+        unstable_components=[
+            UnstableComponentResponse(
+                name=item.name,
+                probability=item.probability,
+                band=item.band,
+                files=item.files,
+                fixed_last_period=item.fixed_last_period,
+                evidence_ids=item.evidence_ids[:5],
+                model_version=facts.instability_model or "unknown",
+            )
+            for item in sorted(facts.instability, key=lambda entry: -entry.probability)[:8]
+        ]
+        if facts.instability
+        else None,
     )
 
 

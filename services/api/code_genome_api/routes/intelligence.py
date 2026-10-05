@@ -46,6 +46,28 @@ def grounded_answer_response(answer: GroundedAnswer) -> GroundedAnswerResponse:
     )
 
 
+_CHAMPION_NAMES = {
+    "logistic_regression": "logistic regression",
+    "random_forest": "random forest",
+    "gradient_boosting": "gradient boosting",
+}
+
+
+def _contribution_note(champion: str, learned: dict[str, Any]) -> str:
+    """Describe what the factor values mean for whichever model was chosen."""
+    name = _CHAMPION_NAMES.get(champion, champion.replace("_", " "))
+    method = learned.get("contribution_method")
+    if isinstance(method, str) and method:
+        return (
+            f"Champion model: {name}, chosen by held-out average precision. Factor values: {method}"
+        )
+    # Results trained before defect-temporal@2 always explained with the logistic model.
+    return (
+        f"Champion model: {name}. Factor values are contributions to the log-odds of a "
+        "logistic regression fitted alongside it."
+    )
+
+
 def _learned_risk(repository_id: str, snapshot_sha: str, learned: dict[str, Any]) -> RiskResponse:
     labels: dict[str, str] = learned.get("feature_labels", {})
     champion = learned.get("champion") or "logistic_regression"
@@ -84,7 +106,7 @@ def _learned_risk(repository_id: str, snapshot_sha: str, learned: dict[str, Any]
             "Probabilities estimate whether a bug-fix commit will touch the file, learned from "
             "this repository's history; they are not proof of a defect.",
             evaluation,
-            "Factor values are logistic-regression contributions to the log-odds.",
+            _contribution_note(champion, learned),
         ],
     )
 

@@ -12,8 +12,10 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePosixPath
+from typing import Any
 
 import networkx as nx
+from code_genome_ml import group_components
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,6 +46,40 @@ class RiskFact:
     evidence_ids: list[str]
 
 
+@dataclass(frozen=True)
+class InstabilityFact:
+    """One component forecast from the trained instability model (inferred, not a fact)."""
+
+    name: str
+    probability: float
+    band: str
+    files: int
+    fixed_last_period: bool
+    evidence_ids: list[str]
+
+
+def instability_facts(result: dict[str, Any] | None) -> tuple[list[InstabilityFact], str | None]:
+    """Read a stored ``instability`` model result; empty when untrained or abstained."""
+    if not result or result.get("status") != "trained":
+        return [], None
+    facts = []
+    for item in result.get("predictions", []):
+        try:
+            facts.append(
+                InstabilityFact(
+                    name=str(item["component"]),
+                    probability=float(item["probability"]),
+                    band=item["band"] if item.get("band") in {"high", "medium"} else "low",
+                    files=int(item.get("files", 0)),
+                    fixed_last_period=bool(item.get("fixed_last_period", False)),
+                    evidence_ids=[f"commit:{sha}" for sha in item.get("evidence_shas", [])],
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return facts, str(result.get("model_version", "unknown"))
+
+
 @dataclass
 class SnapshotFacts:
     repository_name: str
@@ -62,6 +98,8 @@ class SnapshotFacts:
     chunks: list[KnowledgeChunkRecord]
     file_evidence: dict[str, str] = field(default_factory=dict)
     component_of: dict[str, str] = field(default_factory=dict)
+    instability: list[InstabilityFact] = field(default_factory=list)
+    instability_model: str | None = None
 
     @property
     def internal_imports(self) -> list[tuple[str, str, str]]:
@@ -193,34 +231,8 @@ def load_facts(
 
 
 def components(paths: list[str], minimum: int = 5, maximum: int = 18) -> dict[str, str]:
-    """Group source files by directory at the depth that yields a readable component map.
-
-    Top-level folders are often too coarse (one "src") and leaf folders too fine, so the
-    shallowest depth with at least ``minimum`` groups and no group holding over a third of the
-    files wins. Groups beyond ``maximum`` fold into "(other)".
-    """
-    if not paths:
-        return {}
-
-    def keyed(depth: int) -> dict[str, str]:
-        mapping = {}
-        for path in paths:
-            parts = PurePosixPath(path).parts[:-1]
-            mapping[path] = "/".join(parts[:depth]) if parts else "(root)"
-        return mapping
-
-    chosen = keyed(1)
-    for depth in range(1, 6):
-        mapping = keyed(depth)
-        sizes = Counter(mapping.values())
-        chosen = mapping
-        if len(sizes) >= minimum and max(sizes.values()) <= len(paths) / 3:
-            break
-        if len(sizes) > maximum:
-            break
-    sizes = Counter(chosen.values())
-    kept = {name for name, _ in sizes.most_common(maximum)}
-    return {path: (name if name in kept else "(other)") for path, name in chosen.items()}
+    """Group source files by directory (see ``code_genome_ml.group_components``)."""
+    return group_components(paths, minimum, maximum)
 
 
 # ---------------------------------------------------------------- health
@@ -758,6 +770,21 @@ def _risk_report(
         for node in sorted(nodes, key=lambda item: -(item.risk or 0))
         if node.risk is not None
     ][:10] or ["- No module risk could be computed."]
+    if facts.instability:
+        lines += [
+            "",
+            f"## Components likely to become unstable next period ({facts.instability_model})",
+            "",
+            "Inferred forecast: probability that a bug-fix commit touches the component in the "
+            "next period, from its recent activity sequence. A prompt for review, not a finding.",
+            "",
+        ]
+        lines += [
+            f"- {_code(item.name)}: {item.probability:.0%} ({item.band}; {item.files} files"
+            + ("; fixed in the latest period" if item.fixed_last_period else "")
+            + f"; evidence {', '.join(item.evidence_ids[:2]) or 'none'})"
+            for item in sorted(facts.instability, key=lambda entry: -entry.probability)[:8]
+        ]
     lines += ["", "## Change hotspots", ""]
     lines += [
         f"- {_code(item.path)}: {item.commit_count} commits, churn {item.churn} "

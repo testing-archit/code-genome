@@ -124,11 +124,38 @@ def test_models_train_and_power_risk_search_and_impact(
     assert tasks["anomalies"]["status"] == "trained"
     # Without an import graph, retrieval evaluation and link prediction still run on history.
     assert tasks["change_impact"]["status"] == "trained"
+    instability = tasks["instability"]
+    assert instability["status"] == "trained", instability["result"].get("reason")
+    assert instability["model_version"].startswith("instability-windowed")
+    assert {"model", "baseline_persistence"} <= set(instability["result"]["metrics"])
+    stored = client.get(f"/api/v1/repositories/{repository_id}/ml", headers=OWNER).json()
+    assert stored["tasks"]["instability"]["result"]["predictions"]
+
+    overview = client.get(f"/api/v1/repositories/{repository_id}/overview", headers=OWNER).json()
+    unstable = overview["unstable_components"]
+    assert unstable and {item["name"] for item in unstable} <= {
+        "src/billing",
+        "src/auth",
+        "src/ui",
+        "src/api",
+        "src/search",
+    }
+    assert unstable == sorted(unstable, key=lambda item: -item["probability"])
+    assert all(ref.startswith("commit:") for item in unstable for ref in item["evidence_ids"])
+    assert any("inferred forecast" in line for line in overview["limitations"])
+    docs = client.get(f"/api/v1/repositories/{repository_id}/docs", headers=OWNER).json()
+    report = next(item for item in docs["documents"] if item["name"] == "RISK_REPORT.md")
+    assert "likely to become unstable next period" in report["markdown"]
 
     risk = client.get(f"/api/v1/repositories/{repository_id}/risk", headers=OWNER).json()
-    assert risk["scores"][0]["model_version"].startswith("defect-temporal@1")
+    assert risk["scores"][0]["model_version"].startswith("defect-temporal@2")
     assert len({item["path"] for item in risk["scores"][:4]} & BUGGY) >= 3
     assert risk["scores"][0]["evidence_ids"][0].startswith("commit:")
+    champion = tasks["defect_risk"]["result"]["champion"]
+    assert risk["scores"][0]["model_version"].endswith(f":{champion}")
+    note = risk["limitations"][-1]
+    assert note.startswith(f"Champion model: {champion.replace('_', ' ')}")
+    assert tasks["defect_risk"]["result"]["contribution_method"] in note
 
     impact = client.get(
         f"/api/v1/repositories/{repository_id}/impact",
@@ -183,5 +210,9 @@ def test_short_history_abstains_and_keeps_baseline_risk(
     ]
     assert tasks["defect_risk"]["status"] == "insufficient_data"
     assert tasks["defect_risk"]["result"]["reason"]
+    assert tasks["instability"]["status"] == "insufficient_data"
+    assert tasks["instability"]["result"]["reason"]
+    overview = client.get(f"/api/v1/repositories/{repository_id}/overview", headers=OWNER).json()
+    assert overview["unstable_components"] is None
     risk = client.get(f"/api/v1/repositories/{repository_id}/risk", headers=OWNER).json()
     assert not any(item["model_version"].startswith("defect") for item in risk["scores"])

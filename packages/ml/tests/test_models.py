@@ -121,7 +121,7 @@ def test_defect_model_learns_from_history_and_explains_predictions() -> None:
         inputs.commits, inputs.changes, fix_shas, inputs.files, inputs.imports
     )
     assert result.status == "trained"
-    assert result.champion in {"logistic_regression", "gradient_boosting"}
+    assert result.champion in {"logistic_regression", "random_forest", "gradient_boosting"}
     champion = result.metrics[result.champion]  # type: ignore[index]
     assert champion["roc_auc"] >= 0.75
     top = {item.path for item in result.predictions[:4]}
@@ -148,6 +148,7 @@ def test_full_pipeline_trains_every_task_with_evaluations() -> None:
         "retrieval",
         "modules",
         "anomalies",
+        "instability",
     }
     assert all(result["status"] == "trained" for result in results.values()), {
         name: result.get("reason") for name, result in results.items()

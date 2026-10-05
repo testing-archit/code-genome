@@ -685,6 +685,18 @@ class ContributorResponse(BaseModel):
     commits: int
 
 
+class UnstableComponentResponse(BaseModel):
+    """Inferred forecast from the instability model; not a repository fact."""
+
+    name: str
+    probability: float
+    band: Literal["high", "medium", "low"]
+    files: int
+    fixed_last_period: bool
+    evidence_ids: list[str]
+    model_version: str
+
+
 class RepositoryOverviewResponse(BaseModel):
     repository_id: str
     snapshot_sha: str
@@ -698,6 +710,8 @@ class RepositoryOverviewResponse(BaseModel):
     contributors: list[ContributorResponse]
     risk_model: str
     limitations: list[str]
+    # None when the instability model has not been trained (or abstained) for the snapshot.
+    unstable_components: list[UnstableComponentResponse] | None = None
 
 
 class ModuleNodeResponse(BaseModel):
