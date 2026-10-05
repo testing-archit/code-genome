@@ -552,6 +552,8 @@ export type RepositoryOverview = {
   riskiest_files: Array<{ path: string; score: number; rationale: string; evidence_ids: string[] }>;
   contributors: Array<{ name: string; commits: number }>;
   risk_model: string;
+  /** Null when the instability model is untrained or abstained. */
+  unstable_components?: UnstableComponent[] | null;
   limitations: string[];
 };
 

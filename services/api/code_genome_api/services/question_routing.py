@@ -19,15 +19,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import (
+    CoChangeEdge,
     FileHotspot,
     FileManifestEntry,
     GraphNode,
     KnowledgeChunkRecord,
     ModuleCandidate,
+    RepositoryCommit,
     RepositorySnapshot,
 )
 from .impact import impact_for_paths
 from .knowledge import document_text
+from .ml import trained_result
 
 REFUSAL = "No supporting evidence was identified in the selected scope."
 PROJECT_MANIFESTS = {
@@ -310,6 +313,141 @@ def _impact(
     return GroundedResult("\n".join(lines), tuple(texts), tuple(limitations))
 
 
+_WHY = re.compile(r"\b(why|kyun|kyon|kyu|reason|explain)\b|क्यों", re.IGNORECASE)
+_RISKY = re.compile(
+    r"\b(risk|risky|riskiest|dangerous|fragile|bug[- ]?prone|unstable|hotspot)\b|जोखिम|रिस्क",
+    re.IGNORECASE,
+)
+
+
+def _asks_why_risky(question: str) -> bool:
+    # Word order differs between English ("why is X risky") and Hinglish ("X risky kyun").
+    return bool(_WHY.search(question) and _RISKY.search(question))
+
+
+_NAME_TOKEN = re.compile(r"[A-Za-z_][\w.-]{3,}")
+
+
+def risk_question_targets(question: str, paths: list[str]) -> list[str]:
+    """Files named in a "why is X risky?" question, by path, file name, or bare stem."""
+    if not _asks_why_risky(question):
+        return []
+    named = [match.group(1).strip("./") for match in _FILE_TOKEN.finditer(question)]
+    stems: dict[str, list[str]] = {}
+    for path in paths:
+        stems.setdefault(PurePosixPath(path).stem.lower(), []).append(path)
+    for token in _NAME_TOKEN.findall(question):
+        lowered = token.lower().rstrip(".?")
+        if lowered in stems and lowered not in {"index", "main", "utils", "types", "test"}:
+            named.extend(stems[lowered][:2])
+    resolved: list[str] = []
+    for token in named:
+        matches, _ = resolve_path(paths, token)
+        resolved.extend(matches)
+    return list(dict.fromkeys(resolved))[:3]
+
+
+_FIX_WORDS = re.compile(r"\b(fix|fixes|fixed|bug|regression|hotfix|crash|error)\b", re.IGNORECASE)
+
+
+def _why_risky(
+    db: Session,
+    snapshot: RepositorySnapshot,
+    targets: list[str],
+    pool: dict[str, RetrievalDocument],
+) -> GroundedResult | None:
+    """Explain a file's risk from the model's factors, its fix history, and co-change."""
+    learned = trained_result(db, snapshot, "defect_risk")
+    predictions = {item["path"]: item for item in (learned or {}).get("predictions", [])}
+    labels: dict[str, str] = (learned or {}).get("feature_labels", {})
+    hotspots = {
+        row.path: row
+        for row in db.scalars(
+            select(FileHotspot).where(
+                FileHotspot.snapshot_id == snapshot.id,
+                FileHotspot.workspace_id == snapshot.workspace_id,
+                FileHotspot.path.in_(targets),
+            )
+        )
+    }
+    texts: dict[str, list[str]] = {}
+    lines: list[str] = []
+    for path in targets:
+        prediction = predictions.get(path)
+        hotspot = hotspots.get(path)
+        shas = list((prediction or {}).get("evidence_shas", []))
+        if hotspot is not None:
+            shas.extend(hotspot.evidence_shas[:5])
+        commits = {
+            row.sha: row
+            for row in db.scalars(
+                select(RepositoryCommit).where(
+                    RepositoryCommit.repository_id == snapshot.repository_id,
+                    RepositoryCommit.workspace_id == snapshot.workspace_id,
+                    RepositoryCommit.sha.in_(list(dict.fromkeys(shas))),
+                )
+            )
+        }
+        if prediction is not None:
+            factors = ", ".join(
+                f"{labels.get(name, name)} ({'+' if value >= 0 else ''}{value:.2f})"
+                for name, value in prediction.get("contributions", [])[:4]
+            )
+            version = learned["model_version"] if learned else "risk model"
+            line = (
+                f"{path} has {prediction['band']} predicted defect-proneness "
+                f"(p={prediction['probability']:.2f}, {version}). "
+                f"Strongest factors: {factors}."
+            )
+            lines.append(line)
+            anchor = f"commit:{shas[0]}" if shas else None
+            if anchor:
+                texts.setdefault(anchor, []).append(line)
+        if hotspot is not None:
+            line = (
+                f"{path} changed in {hotspot.commit_count} commits with {hotspot.churn} lines of "
+                f"churn (relative hotspot score {hotspot.score:.2f})."
+            )
+            lines.append(line)
+            texts.setdefault(f"hotspot:{path}", []).append(line)
+        fixes = [commit for commit in commits.values() if _FIX_WORDS.search(commit.message)]
+        for commit in fixes[:4]:
+            subject = commit.message.splitlines()[0][:160]
+            texts.setdefault(f"commit:{commit.sha}", []).append(
+                f"Bug-fix commit touching {path}: {subject}"
+            )
+        if fixes:
+            lines.append(f"- {len(fixes)} of its recent commits are bug fixes.")
+        partners = db.scalars(
+            select(CoChangeEdge)
+            .where(
+                CoChangeEdge.snapshot_id == snapshot.id,
+                CoChangeEdge.workspace_id == snapshot.workspace_id,
+                (CoChangeEdge.left_path == path) | (CoChangeEdge.right_path == path),
+            )
+            .order_by(CoChangeEdge.commit_count.desc())
+            .limit(3)
+        )
+        for edge in partners:
+            other = edge.right_path if edge.left_path == path else edge.left_path
+            if edge.evidence_shas:
+                texts.setdefault(f"commit:{edge.evidence_shas[0]}", []).append(
+                    f"{path} changed together with {other} in {edge.commit_count} commits."
+                )
+    if not texts:
+        return None
+    for evidence_id, parts in texts.items():
+        pool[evidence_id] = RetrievalDocument(evidence_id, "risk", " ".join(parts))
+    return GroundedResult(
+        "\n".join(lines) or "Risk evidence for the named file is listed below.",
+        tuple(texts),
+        (
+            "Risk is a learned or relative estimate of defect-proneness, not proof of a defect.",
+            "Bug-fix commits are identified from commit messages.",
+        ),
+    )
+
+
 def route_question(
     db: Session,
     snapshot: RepositorySnapshot,
@@ -317,7 +455,21 @@ def route_question(
     pool: dict[str, RetrievalDocument],
     repository_name: str = "",
 ) -> GroundedResult | None:
-    """A deterministic answer for overview and change-impact questions, or None."""
+    """A deterministic answer for overview, risk, and change-impact questions, or None."""
+    if _asks_why_risky(question):
+        paths = list(
+            db.scalars(
+                select(FileManifestEntry.path).where(
+                    FileManifestEntry.snapshot_id == snapshot.id,
+                    FileManifestEntry.workspace_id == snapshot.workspace_id,
+                )
+            )
+        )
+        targets = risk_question_targets(question, paths)
+        if targets:
+            explained = _why_risky(db, snapshot, targets, pool)
+            if explained is not None:
+                return explained
     tokens = mentioned_files(question)
     if tokens:
         return _impact(db, snapshot, tokens, pool)

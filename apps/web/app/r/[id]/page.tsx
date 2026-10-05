@@ -113,6 +113,30 @@ function Hub() {
         </Panel>
       </div>
 
+      {overview.data?.unstable_components && overview.data.unstable_components.length > 0 && (
+        <Panel
+          title="Likely to become unstable"
+          description={`Forecast for the next period from each component's recent sequence of commits and fixes (${overview.data.unstable_components[0].model_version}). Inferred, not a certainty.`}
+          actions={<Link className="button button-ghost button-small" href={`${base}/models`}>How it is evaluated</Link>}
+          flush
+        >
+          <div className="list">
+            {overview.data.unstable_components.slice(0, 5).map((item) => (
+              <div className="list-row" key={item.name}>
+                <div className="grow" style={{ minWidth: 0 }}>
+                  <code className="truncate" style={{ display: "block" }}>{item.name}</code>
+                  <small>{item.files} {item.files === 1 ? "file" : "files"}{item.fixed_last_period ? ", needed a fix last period" : ""}</small>
+                  <EvidenceChips ids={item.evidence_ids} limit={2} />
+                </div>
+                <span className={`badge ${item.band === "high" ? "badge-bad" : item.band === "medium" ? "badge-warn" : ""}`}>{item.band}</span>
+                <Meter tone="eosin" value={item.probability} />
+                <span className="score">{Math.round(item.probability * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
       <div className="grid-2">
         <Panel
           title="Architecture"

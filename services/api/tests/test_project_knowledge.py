@@ -223,3 +223,30 @@ def test_voice_session_carries_a_repository_brief(
     assert "fixture-pay" in instruction and "Top-level folders" in instruction
     assert "sk-live" not in instruction
     assert "ye project" in instruction and "app.tsx" in instruction
+
+
+def test_why_risky_questions_resolve_named_files() -> None:
+    from code_genome_api.services.question_routing import (  # noqa: PLC0415
+        _asks_why_risky,
+        risk_question_targets,
+    )
+
+    paths = ["src/payments/PaymentService.ts", "src/index.ts", "backend/src/server.ts"]
+    assert _asks_why_risky("Why is PaymentService high risk?")
+    assert _asks_why_risky("server.ts itna risky kyun hai?")
+    assert not _asks_why_risky("What does PaymentService do?")
+    assert risk_question_targets("Why is PaymentService high risk?", paths) == [
+        "src/payments/PaymentService.ts"
+    ]
+    assert risk_question_targets("server.ts itna risky kyun hai?", paths) == [
+        "backend/src/server.ts"
+    ]
+    assert risk_question_targets("why is index risky", paths) == []
+
+
+def test_why_risky_question_cites_hotspot_and_fix_history(
+    analysed: Path, client: TestClient
+) -> None:
+    answer = _ask(client, "Why is format.ts risky?")
+    assert answer["evidence_ids"]
+    assert "format.ts" in answer["answer"]
