@@ -1004,3 +1004,20 @@ class TimelineResponse(BaseModel):
     overall: list[TimelinePointResponse]
     components: list[ComponentTimelineResponse]
     limitations: list[str]
+
+
+class ProviderSignalResponse(BaseModel):
+    """CI or deployment evidence read from GitHub for one commit (provider-evidence@1)."""
+
+    id: str
+    repository_id: str
+    provider: str
+    kind: Literal["ci_run", "deployment"]
+    commit_sha: str
+    name: str
+    outcome: str
+    environment: str | None
+    url: str | None
+    observed_at: datetime | None
+    fetched_at: datetime
+    analysis_version: str

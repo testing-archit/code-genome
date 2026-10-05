@@ -723,6 +723,37 @@ class GeneratedDocRewrite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class ProviderSignal(Base):
+    """CI or deployment evidence read from a provider for one commit, with its raw payload."""
+
+    __tablename__ = "provider_signals"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "external_id", name="uq_repository_provider_signal"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(40))
+    kind: Mapped[str] = mapped_column(String(20))
+    external_id: Mapped[str] = mapped_column(String(80))
+    commit_sha: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    outcome: Mapped[str] = mapped_column(String(30))
+    environment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    analysis_version: Mapped[str] = mapped_column(String(80))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class WebhookDelivery(Base):
     """Provider delivery IDs already processed, kept for replay protection.
 

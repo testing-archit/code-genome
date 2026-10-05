@@ -65,3 +65,14 @@ def _fresh_impact_cache() -> None:
     from code_genome_api.services import impact
 
     impact._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never call GitHub; a test that needs provider data patches this fetcher."""
+    from code_genome_api.services import provider_evidence
+
+    def offline(url: str, token: str | None) -> object:
+        raise provider_evidence.ProviderError("GitHub is not reachable in tests.")
+
+    monkeypatch.setattr(provider_evidence, "github_fetch", offline)

@@ -1075,3 +1075,20 @@ export type EvolutionTimeline = {
   components: Array<{ name: string; role: ArchitectureRole | string; points: TimelinePoint[] }>;
   limitations: string[];
 };
+
+/** GET /delivery-reports/signals/{id}: CI or deployment evidence read from GitHub. */
+export type ProviderSignal = {
+  id: string;
+  repository_id: string;
+  provider: string;
+  kind: "ci_run" | "deployment";
+  commit_sha: string;
+  name: string;
+  /** Check-run conclusion (success, failure, ...) or latest deployment state. */
+  outcome: string;
+  environment: string | null;
+  url: string | null;
+  observed_at: string | null;
+  fetched_at: string;
+  analysis_version: string;
+};

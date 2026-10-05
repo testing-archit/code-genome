@@ -29,3 +29,40 @@ def test_delivery_narrative_is_not_mistaken_for_live_deployment() -> None:
     claim = parse_claims("Added the delivery auditor API and claim ledger.")[0]
 
     assert claim.claim_type == "repository_change"
+
+
+def _ci(identifier: str, outcome: str) -> EvidenceCandidate:
+    return EvidenceCandidate(f"provider:{identifier}", "ci_run", "CI check tests", outcome=outcome)
+
+
+def _deploy(identifier: str, outcome: str, environment: str) -> EvidenceCandidate:
+    return EvidenceCandidate(
+        f"provider:{identifier}", "deployment", "deploy", outcome=outcome, environment=environment
+    )
+
+
+def test_test_claims_follow_ci_outcomes_not_code_changes() -> None:
+    claim = parse_claims("All tests are passing.")[0]
+    assert claim.claim_type == "test"
+    assert assess_claim(claim, ()).status == "EXTERNAL_EVIDENCE_REQUIRED"
+    passed = assess_claim(claim, (_ci("a", "success"), _ci("b", "skipped")))
+    assert passed.status == "VERIFIED" and passed.evidence_ids == ("provider:a",)
+    assert "functional correctness" in passed.limitations[0]
+    mixed = assess_claim(claim, (_ci("a", "success"), _ci("b", "failure")))
+    assert mixed.status == "PARTIALLY_VERIFIED" and mixed.evidence_ids[0] == "provider:b"
+    failed = assess_claim(claim, (_ci("b", "failure"),))
+    assert failed.status == "NO_SUPPORTING_EVIDENCE"
+
+
+def test_deployment_claims_need_a_successful_deployment_to_the_named_environment() -> None:
+    claim = parse_claims("Deployed the export to production.")[0]
+    assert assess_claim(claim, ()).status == "EXTERNAL_EVIDENCE_REQUIRED"
+    staging = assess_claim(claim, (_deploy("s", "success", "staging"),))
+    assert staging.status == "PARTIALLY_VERIFIED"
+    failed = assess_claim(claim, (_deploy("p", "failure", "production"),))
+    assert failed.status == "NO_SUPPORTING_EVIDENCE"
+    live = assess_claim(claim, (_deploy("p", "success", "Production"),))
+    assert live.status == "VERIFIED" and live.evidence_ids == ("provider:p",)
+    # A merge or code change alone never counts as a deployment.
+    code_only = (EvidenceCandidate("change:abc:export.ts", "repository_change", "export deployed"),)
+    assert assess_claim(claim, code_only).status == "EXTERNAL_EVIDENCE_REQUIRED"

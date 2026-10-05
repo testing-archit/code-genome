@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Semantic similarity backend for SEMANTICALLY_RELATED_TO edges: "auto" uses a local
     # sentence-transformer when the optional "embeddings" extra and weights are present, else LSA.
     semantic_backend: Literal["auto", "lsa", "transformer"] = "auto"
+    # Optional read-only token for GitHub CI/deployment evidence on public repositories (the
+    # anonymous API allows 60 requests an hour). Private repositories use their stored token.
+    github_api_token: SecretStr | None = None
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def validate_runtime(self) -> None:

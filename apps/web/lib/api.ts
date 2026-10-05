@@ -21,6 +21,7 @@ import type {
   MlOverview,
   ModuleGraph,
   ProblemDetail,
+  ProviderSignal,
   Repository,
   RepositoryAutomation,
   RepositoryConnection,
@@ -307,9 +308,13 @@ export const api = {
           from: new Date(`${from}T00:00:00Z`).toISOString(),
           to: new Date(`${to}T23:59:59Z`).toISOString(),
           branches: [branch],
+          include_ci: true,
+          include_deployments: true,
         },
       }),
     }),
+  getProviderSignal: (signalId: string) =>
+    request<ProviderSignal>(`/delivery-reports/signals/${encodeURIComponent(signalId)}`),
   assessDeliveryReport: (reportId: string) =>
     request<DeliveryReport>(`/delivery-reports/${reportId}/assessments`, { method: "POST" }),
   downloadDeliveryReport: async (reportId: string) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import type { AnalysisRun, Architecture, Evidence, MlOverview, Repository, RepositoryInventory } from "@code-genome/contracts";
+import type { AnalysisRun, Architecture, Evidence, MlOverview, ProviderSignal, Repository, RepositoryInventory } from "@code-genome/contracts";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
@@ -348,6 +348,8 @@ function EvidenceDrawer({ evidenceId, onClose }: { evidenceId: string; onClose: 
         <a className="button button-secondary" href={`${repository.clone_url.replace(/\.git$/, "")}/commit/${encodeURIComponent(sha)}`} rel="noreferrer" target="_blank">Open the commit on GitHub</a>
       </>
     );
+  } else if (kind === "provider") {
+    body = <ProviderEvidence signalId={value} />;
   } else if (!isProvenance) {
     body = <dl className="kv"><dt>Reference</dt><dd><code>{evidenceId}</code></dd><dt>Note</dt><dd>This kind of evidence has no detail view yet.</dd></dl>;
   } else if (error) {
@@ -400,6 +402,37 @@ function EvidenceDrawer({ evidenceId, onClose }: { evidenceId: string; onClose: 
   );
 }
 
+function ProviderEvidence({ signalId }: { signalId: string }) {
+  const [signal, setSignal] = useState<ProviderSignal | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    api
+      .getProviderSignal(signalId)
+      .then((item) => active && setSignal(item))
+      .catch((caught: unknown) => active && setError(errorMessage(caught, "This evidence could not be loaded.")));
+    return () => {
+      active = false;
+    };
+  }, [signalId]);
+  if (error) return <Notice tone="error" title="Evidence unavailable">{error}</Notice>;
+  if (!signal) return <div className="skeleton" style={{ height: 120 }} />;
+  const passed = signal.outcome === "success";
+  return (
+    <>
+      <dl className="kv">
+        <dt>{signal.kind === "ci_run" ? "CI check" : "Deployment"}</dt><dd>{signal.name}</dd>
+        <dt>Outcome</dt><dd><span className={`badge ${passed ? "badge-ok" : "badge-warn"}`}>{signal.outcome}</span></dd>
+        {signal.environment && <><dt>Environment</dt><dd>{signal.environment}</dd></>}
+        <dt>Commit</dt><dd><code>{signal.commit_sha}</code></dd>
+        {signal.observed_at && <><dt>Recorded</dt><dd>{formatTime(signal.observed_at)}</dd></>}
+        <dt>Source</dt><dd>GitHub ({signal.analysis_version}), read {formatTime(signal.fetched_at)}</dd>
+      </dl>
+      {signal.url && <a className="button button-secondary" href={signal.url} rel="noreferrer" target="_blank">Open on GitHub</a>}
+    </>
+  );
+}
+
 export function EvidenceChips({ ids, limit = 8 }: { ids: string[]; limit?: number }) {
   const { openEvidence } = useRepo();
   if (ids.length === 0) return null;
@@ -423,6 +456,7 @@ function chipLabel(id: string): string {
   if (kind === "change") return `change ${value.slice(0, 8)} ${value.split("/").pop() ?? ""}`.trim();
   if (kind === "module") return `module ${value.slice(0, 14)}`;
   if (kind === "evidence") return `source ${value.slice(0, 12)}`;
+  if (kind === "provider") return "CI / deploy";
   if (kind === "file") return value.split("/").slice(-2).join("/");
   return id.slice(0, 20);
 }

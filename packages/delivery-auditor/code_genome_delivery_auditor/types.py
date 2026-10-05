@@ -15,6 +15,9 @@ class EvidenceCandidate:
     id: str
     kind: str
     text: str
+    # Provider evidence only: CI conclusion or deployment state, and deployment environment.
+    outcome: str | None = None
+    environment: str | None = None
 
 
 @dataclass(frozen=True)

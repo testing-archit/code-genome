@@ -126,7 +126,7 @@ export default function AuditPage() {
               <label className="field">From<input className="input" max={to} onChange={(event) => setFrom(event.target.value)} required type="date" value={from} /></label>
               <label className="field">To<input className="input" min={from} onChange={(event) => setTo(event.target.value)} required type="date" value={to} /></label>
             </div>
-            <p className="muted small">Branch <code>{repository.default_branch}</code>. Claims about tests passing or deployments stay unverified until CI or deployment evidence is connected.</p>
+            <p className="muted small">Branch <code>{repository.default_branch}</code>. Test and deployment claims are checked against GitHub Actions runs and GitHub Deployments for the scoped commits; without such records they stay unverified.</p>
             {error && <Notice tone="error">{error}</Notice>}
             <button className="button button-primary" disabled={working || text.trim().length === 0} type="submit">{working ? "Checking claims…" : "Check report"}</button>
           </form>

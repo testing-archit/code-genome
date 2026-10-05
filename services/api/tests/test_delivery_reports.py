@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from typing import cast
 
+import pytest
 from code_genome_api.models import (
     AnalysisRun,
     FileChange,
@@ -10,6 +11,7 @@ from code_genome_api.models import (
     Workspace,
 )
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -238,3 +240,144 @@ def test_assessment_counts_each_change_once_across_snapshots(
     assert unreported["path"] == "config/settings.yaml"
     assert unreported["evidence_ids"] == [f"change:{other}:config/settings.yaml"]
     assert "Observed in 1 scoped commit(s)" in unreported["explanation"]
+
+
+def test_ci_and_deployment_claims_use_github_evidence(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from code_genome_api.models import AuditEvent, ProviderSignal
+    from code_genome_api.services import provider_evidence
+
+    seed_workspace(session_factory, "ws_ci", "usr_ci")
+    repository_id = register(client, "ws_ci", "usr_ci", "ci-repo")
+    sha = "d" * 40
+    observed = datetime(2026, 9, 10, 12, tzinfo=UTC)
+    with session_factory() as db:
+        seed_snapshot(db, "ws_ci", repository_id, "snapshot_ci")
+        db.add(
+            RepositoryCommit(
+                id="commit_ci",
+                workspace_id="ws_ci",
+                repository_id=repository_id,
+                sha=sha,
+                parent_shas=[],
+                author_name="Dev",
+                author_email="dev@example.com",
+                authored_at=observed,
+                message="add invoice export",
+            )
+        )
+        db.add(
+            FileChange(
+                id="change_ci",
+                workspace_id="ws_ci",
+                repository_id=repository_id,
+                snapshot_id="snapshot_ci",
+                commit_sha=sha,
+                path="src/export.ts",
+                authored_at=observed,
+                churn=12,
+            )
+        )
+        db.commit()
+    calls: list[str] = []
+
+    def fake(url: str, token: str | None) -> object:
+        calls.append(url)
+        if url.endswith("/statuses?per_page=1"):
+            return [{"state": "success", "created_at": "2026-09-10T13:00:00Z"}]
+        if "/check-runs" in url:
+            return {
+                "check_runs": [
+                    {"id": 11, "name": "test", "status": "completed", "conclusion": "success"},
+                    {"id": 12, "name": "lint", "status": "in_progress", "conclusion": None},
+                ]
+            }
+        return [{"id": 77, "sha": sha, "environment": "production"}]
+
+    monkeypatch.setattr(provider_evidence, "github_fetch", fake)
+    created = client.post(
+        "/api/v1/delivery-reports",
+        headers={**auth("ws_ci", "usr_ci"), "Idempotency-Key": "report-ci"},
+        json={
+            "repository_id": repository_id,
+            "text": "Added invoice export. All tests pass. Deployed it to production.",
+            "scope": {
+                "from": "2026-09-01T00:00:00Z",
+                "to": "2026-09-13T23:59:59Z",
+                "branches": ["main"],
+                "include_ci": True,
+                "include_deployments": True,
+            },
+        },
+    )
+    assert created.status_code == 201
+    assessed = client.post(
+        f"/api/v1/delivery-reports/{created.json()['id']}/assessments",
+        headers=auth("ws_ci", "usr_ci"),
+    )
+    assert assessed.status_code == 200, assessed.text
+    claims = {item["claim_type"]: item["assessment"] for item in assessed.json()["claims"]}
+    assert claims["test"]["status"] == "VERIFIED"
+    assert claims["deployment"]["status"] == "VERIFIED"
+    assert all(url.startswith("https://api.github.com/repos/acme/ci-repo/") for url in calls)
+    signal_id = claims["deployment"]["evidence_ids"][0].removeprefix("provider:")
+    detail = client.get(
+        f"/api/v1/delivery-reports/signals/{signal_id}", headers=auth("ws_ci", "usr_ci")
+    )
+    assert detail.status_code == 200
+    assert detail.json()["environment"] == "production"
+    assert detail.json()["outcome"] == "success"
+    hidden = client.get(
+        f"/api/v1/delivery-reports/signals/{signal_id}", headers=auth("ws_other", "usr_other")
+    )
+    assert hidden.status_code in {403, 404}
+    with session_factory() as db:
+        rows = list(db.scalars(select(ProviderSignal)))
+        assert {row.kind for row in rows} == {"ci_run", "deployment"}
+        assert all(row.raw_json and row.workspace_id == "ws_ci" for row in rows)
+        assert db.scalar(select(AuditEvent).where(AuditEvent.action == "delivery_report.assessed"))
+
+
+def test_provider_outage_keeps_claims_unverified_with_a_limitation(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    seed_workspace(session_factory, "ws_down", "usr_down")
+    repository_id = register(client, "ws_down", "usr_down", "down-repo")
+    with session_factory() as db:
+        seed_snapshot(db, "ws_down", repository_id, "snapshot_down")
+        db.add(
+            FileChange(
+                id="change_down",
+                workspace_id="ws_down",
+                repository_id=repository_id,
+                snapshot_id="snapshot_down",
+                commit_sha="e" * 40,
+                path="src/a.ts",
+                authored_at=datetime(2026, 9, 10, tzinfo=UTC),
+                churn=1,
+            )
+        )
+        db.commit()
+    created = client.post(
+        "/api/v1/delivery-reports",
+        headers={**auth("ws_down", "usr_down"), "Idempotency-Key": "report-down"},
+        json={
+            "repository_id": repository_id,
+            "text": "Tests are passing.",
+            "scope": {
+                "from": "2026-09-01T00:00:00Z",
+                "to": "2026-09-13T23:59:59Z",
+                "include_ci": True,
+            },
+        },
+    )
+    assessed = client.post(
+        f"/api/v1/delivery-reports/{created.json()['id']}/assessments",
+        headers=auth("ws_down", "usr_down"),
+    )
+    assessment = assessed.json()["claims"][0]["assessment"]
+    assert assessment["status"] == "EXTERNAL_EVIDENCE_REQUIRED"
+    assert any("incomplete" in item for item in assessment["limitations"])

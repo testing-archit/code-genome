@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from ..audit import record_audit_event
 from ..auth import Actor, Database
+from ..config import get_settings
 from ..errors import AppError
 from ..idempotency import find_idempotent_resource, fingerprint, record_idempotency
 from ..ids import new_id
@@ -14,9 +15,12 @@ from ..models import (
     DeliveryClaim,
     DeliveryReport,
     FileChange,
+    ProviderSignal,
     Repository,
     RepositoryCommit,
+    RepositoryConnection,
     UnreportedChange,
+    utc_now,
 )
 from ..schemas import (
     DeliveryAssessmentResponse,
@@ -24,8 +28,12 @@ from ..schemas import (
     DeliveryReportCreate,
     DeliveryReportResponse,
     DeliveryScope,
+    ProviderSignalResponse,
     UnreportedChangeResponse,
 )
+from ..services import provider_evidence
+from ..services.credentials import CredentialConfigurationError, CredentialDecryptionError
+from ..services.structural_analysis import _load_git_credential
 
 router = APIRouter(prefix="/delivery-reports", tags=["delivery-auditor"])
 
@@ -210,6 +218,7 @@ def _evidence_candidates(
         for item in db.scalars(
             select(RepositoryCommit).where(
                 RepositoryCommit.repository_id == report.repository_id,
+                RepositoryCommit.workspace_id == report.workspace_id,
                 RepositoryCommit.sha.in_(shas),
             )
         )
@@ -225,6 +234,126 @@ def _evidence_candidates(
     return candidates, changes
 
 
+@router.get("/signals/{signal_id}", response_model=ProviderSignalResponse)
+def get_provider_signal(signal_id: str, db: Database, actor: Actor) -> ProviderSignalResponse:
+    row = db.scalar(
+        select(ProviderSignal).where(
+            ProviderSignal.id == signal_id, ProviderSignal.workspace_id == actor.workspace_id
+        )
+    )
+    if row is None:
+        raise AppError(404, "NOT_FOUND", "Resource not found", "Provider evidence was not found.")
+    return ProviderSignalResponse.model_validate(row, from_attributes=True)
+
+
+def _provider_token(db: Database, repository: Repository) -> str | None:
+    connection = db.scalar(
+        select(RepositoryConnection).where(
+            RepositoryConnection.repository_id == repository.id,
+            RepositoryConnection.workspace_id == repository.workspace_id,
+        )
+    )
+    try:
+        credential = _load_git_credential(
+            connection, workspace_id=repository.workspace_id, repository_id=repository.id
+        )
+    except (CredentialConfigurationError, CredentialDecryptionError):
+        credential = None
+    if credential is not None:
+        return credential.token
+    fallback = get_settings().github_api_token
+    return fallback.get_secret_value() if fallback and fallback.get_secret_value() else None
+
+
+def _provider_candidates(
+    db: Database, report: DeliveryReport, changes: list[FileChange]
+) -> tuple[tuple[EvidenceCandidate, ...], list[str]]:
+    """Fetch (and store) CI and deployment evidence for the scoped commits."""
+    repository = db.scalar(
+        select(Repository).where(
+            Repository.id == report.repository_id,
+            Repository.workspace_id == report.workspace_id,
+        )
+    )
+    newest_first = list(dict.fromkeys(change.commit_sha for change in changes))
+    slug = (
+        provider_evidence.repository_slug(repository.external_id)
+        if repository is not None and repository.provider == "github"
+        else None
+    )
+    limitations: list[str] = []
+    if repository is None or slug is None:
+        limitations.append("CI and deployment evidence is read only for GitHub repositories.")
+    elif newest_first:
+        signals, limitations = provider_evidence.collect_signals(
+            *slug,
+            newest_first,
+            _provider_token(db, repository),
+            fetch=provider_evidence.github_fetch,
+        )
+        for signal in signals:
+            row = db.scalar(
+                select(ProviderSignal).where(
+                    ProviderSignal.repository_id == repository.id,
+                    ProviderSignal.workspace_id == repository.workspace_id,
+                    ProviderSignal.external_id == signal.external_id,
+                )
+            )
+            if row is None:
+                row = ProviderSignal(
+                    id=new_id("sig"),
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    provider="github",
+                    external_id=signal.external_id,
+                )
+                db.add(row)
+            row.kind = signal.kind
+            row.commit_sha = signal.commit_sha
+            row.name = signal.name
+            row.outcome = signal.outcome
+            row.environment = signal.environment
+            row.url = signal.url
+            row.observed_at = signal.observed_at
+            row.raw_json = signal.raw
+            row.analysis_version = provider_evidence.PROVIDER_VERSION
+            row.fetched_at = utc_now()
+        db.flush()
+    stored = list(
+        db.scalars(
+            select(ProviderSignal)
+            .where(
+                ProviderSignal.repository_id == report.repository_id,
+                ProviderSignal.workspace_id == report.workspace_id,
+                ProviderSignal.commit_sha.in_(newest_first),
+            )
+            .order_by(ProviderSignal.observed_at.desc(), ProviderSignal.external_id)
+        )
+    )
+    candidates = tuple(
+        EvidenceCandidate(
+            id=f"provider:{row.id}",
+            kind=row.kind,
+            text=provider_evidence.describe(
+                provider_evidence.Signal(
+                    row.kind,
+                    row.external_id,
+                    row.commit_sha,
+                    row.name,
+                    row.outcome,
+                    row.environment,
+                    row.url,
+                    row.observed_at,
+                )
+            ),
+            outcome=row.outcome,
+            environment=row.environment,
+        )
+        for row in stored
+    )
+    return candidates, limitations
+
+
 @router.post("/{report_id}/assessments", response_model=DeliveryReportResponse)
 def assess_delivery_report(
     report_id: str, request: Request, db: Database, actor: Actor
@@ -238,6 +367,33 @@ def assess_delivery_report(
         )
     )
     candidates, changes = _evidence_candidates(db, report)
+    scope = DeliveryScope.model_validate(report.scope_json)
+    # Provider evidence is read only for the kinds the report's scope asked for.
+    wanted = {
+        kind
+        for kind, claim_type, enabled in (
+            ("ci_run", "test", scope.include_ci),
+            ("deployment", "deployment", scope.include_deployments),
+        )
+        if enabled and any(claim.claim_type == claim_type for claim in claims)
+    }
+    # Each limitation names the claim types it applies to.
+    provider_limits: list[tuple[set[str], str]] = []
+    if not scope.include_ci:
+        provider_limits.append(
+            ({"test"}, "CI evidence was not requested for this report (include_ci).")
+        )
+    if not scope.include_deployments:
+        provider_limits.append(
+            (
+                {"deployment"},
+                "Deployment evidence was not requested for this report (include_deployments).",
+            )
+        )
+    if wanted:
+        provider, fetched_limits = _provider_candidates(db, report, changes)
+        candidates = (*candidates, *(item for item in provider if item.kind in wanted))
+        provider_limits.extend(({"test", "deployment"}, item) for item in fetched_limits)
     cited_paths: set[str] = set()
     for claim in claims:
         existing = db.scalar(
@@ -255,7 +411,17 @@ def assess_delivery_report(
             claim.claim_type,
         )
         result = assess_claim(draft, candidates)
-        cited_paths.update(evidence.split(":", 2)[-1] for evidence in result.evidence_ids)
+        cited_paths.update(
+            evidence.split(":", 2)[-1]
+            for evidence in result.evidence_ids
+            if evidence.startswith("change:")
+        )
+        limitations = list(result.limitations)
+        limitations.extend(
+            text
+            for types, text in provider_limits
+            if claim.claim_type in types and text not in limitations
+        )
         db.add(
             DeliveryAssessment(
                 id=new_id("asm"),
@@ -265,7 +431,7 @@ def assess_delivery_report(
                 confidence=result.confidence,
                 rationale=result.rationale,
                 evidence_ids=list(result.evidence_ids),
-                limitations=list(result.limitations),
+                limitations=limitations,
             )
         )
     by_path: dict[str, list[FileChange]] = {}
