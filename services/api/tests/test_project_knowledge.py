@@ -250,3 +250,39 @@ def test_why_risky_question_cites_hotspot_and_fix_history(
     answer = _ask(client, "Why is format.ts risky?")
     assert answer["evidence_ids"]
     assert "format.ts" in answer["answer"]
+
+
+def test_reanalysis_rebuilds_a_snapshot_made_by_an_older_analyzer(
+    analysed: Path, session_factory: sessionmaker[Session]
+) -> None:
+    from code_genome_api.models import GraphEdge, RepositorySnapshot  # noqa: PLC0415
+    from code_genome_api.services.structural_analysis import (  # noqa: PLC0415
+        CURRENT_GRAPH_VERSION,
+    )
+
+    with session_factory() as db:
+        snapshot = db.scalar(select(RepositorySnapshot))
+        assert snapshot is not None and snapshot.analysis_version == CURRENT_GRAPH_VERSION
+        snapshot_id = snapshot.id
+        chunks_before = db.scalar(select(func.count()).select_from(KnowledgeChunkRecord))
+        # Simulate a snapshot published by an older analyzer without call edges.
+        snapshot.analysis_version = "structural-genome@0.1.0+tree-sitter-js-ts@0.1.0"
+        db.execute(delete(GraphEdge).where(GraphEdge.type == "CALLS"))
+        db.commit()
+
+    seed_analysis(session_factory, "run_rebuild")
+    run_structural_analysis("run_rebuild", session_factory, FixtureCloner(analysed))
+
+    with session_factory() as db:
+        snapshots = list(db.scalars(select(RepositorySnapshot)))
+        run = db.get(AnalysisRun, "run_rebuild")
+        calls = db.scalar(
+            select(func.count()).select_from(GraphEdge).where(GraphEdge.type == "CALLS")
+        )
+        chunks_after = db.scalar(select(func.count()).select_from(KnowledgeChunkRecord))
+    assert run is not None and run.state == "SUCCEEDED"
+    assert [item.id for item in snapshots] == [snapshot_id]
+    assert snapshots[0].analysis_version == CURRENT_GRAPH_VERSION
+    assert snapshots[0].run_id == "run_rebuild" and snapshots[0].published_at is not None
+    assert calls and calls > 0
+    assert chunks_after == chunks_before

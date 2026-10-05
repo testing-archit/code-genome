@@ -310,7 +310,12 @@ def retrieval_mode(db: Session, snapshot: RepositorySnapshot) -> str:
 def retriever(db: Session, snapshot: RepositorySnapshot) -> HybridRetriever:
     """Hybrid retriever for a snapshot, built once per process and snapshot."""
     # Knowledge can be backfilled into an existing snapshot, so it is part of the key.
-    key = (snapshot.id, snapshot.workspace_id, snapshot.commit_sha, knowledge_count(db, snapshot))
+    key = (
+        snapshot.id,
+        snapshot.workspace_id,
+        f"{snapshot.commit_sha}:{snapshot.analysis_version}",
+        knowledge_count(db, snapshot),
+    )
     cached = _primed.get(key)
     if cached is None:
         cached = HybridRetriever(search_documents(db, snapshot))

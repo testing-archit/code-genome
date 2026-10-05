@@ -10,9 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from code_genome_analyzers import FileAnalysis, analyze_source
+from code_genome_analyzers import ANALYZER_VERSION, FileAnalysis, analyze_source
 from code_genome_evolution import EvolutionResult, analyze_evolution, mine_commit_changes
-from code_genome_genome import GenomeGraph, build_structural_graph
+from code_genome_genome import GRAPH_BUILDER_VERSION, GenomeGraph, build_structural_graph
 from code_genome_git import (
     GitCredential,
     GitOperationError,
@@ -29,7 +29,7 @@ from code_genome_git import (
 from code_genome_git import (
     RepositoryCommit as GitCommit,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..audit import record_audit_event
@@ -66,6 +66,9 @@ from .knowledge import ChunkKind
 from .ml import train_snapshot_models
 
 SessionFactory = Callable[[], Session]
+# A snapshot built by another analyzer version is rebuilt in place on re-analysis.
+CURRENT_GRAPH_VERSION = f"{GRAPH_BUILDER_VERSION}+{ANALYZER_VERSION}"
+GRAPH_EVIDENCE_KINDS = ("source_file", "source_range")
 logger = logging.getLogger(__name__)
 SZZ_MAX_FIX_COMMITS = 60
 
@@ -407,27 +410,14 @@ def _normalize_change_times(
             change.authored_at = instant
 
 
-def _persist_graph(
+def _write_graph_rows(
     db: Session,
     run: AnalysisRun,
     repository: Repository,
-    source_snapshot: RepositorySourceSnapshot,
+    snapshot: RepositorySnapshot,
     graph: GenomeGraph,
-) -> RepositorySnapshot:
-    snapshot = RepositorySnapshot(
-        id=_stable_id("snap", run.workspace_id, repository.id, graph.repository_sha),
-        workspace_id=run.workspace_id,
-        repository_id=repository.id,
-        commit_sha=graph.repository_sha,
-        tree_sha=source_snapshot.tree_sha,
-        run_id=run.id,
-        analysis_version=graph.analysis_version,
-        published_at=None,
-    )
-    db.add(snapshot)
-    db.flush()
-    _persist_manifest(db, repository, snapshot, source_snapshot)
-
+) -> None:
+    """Insert provenance, nodes, edges, and diagnostics for a snapshot's graph."""
     for evidence_ref in graph.evidence:
         span = evidence_ref.span
         db.add(
@@ -497,6 +487,56 @@ def _persist_graph(
                 provenance_id=graph_diagnostic.evidence_id,
             )
         )
+
+
+def _persist_graph(
+    db: Session,
+    run: AnalysisRun,
+    repository: Repository,
+    source_snapshot: RepositorySourceSnapshot,
+    graph: GenomeGraph,
+    replace: RepositorySnapshot | None = None,
+) -> RepositorySnapshot:
+    """Write a snapshot's structural graph.
+
+    ``replace`` is a published snapshot of the same commit built by an older analyzer. Its
+    graph is replaced inside the caller's transaction, so readers see the old graph or the
+    new one, never a partial mix. Knowledge chunks and bug links are kept.
+    """
+    if replace is not None:
+        snapshot = replace
+        db.execute(delete(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id))
+        db.execute(delete(ParseDiagnostic).where(ParseDiagnostic.snapshot_id == snapshot.id))
+        db.execute(delete(GraphNode).where(GraphNode.snapshot_id == snapshot.id))
+        db.execute(
+            delete(Provenance).where(
+                Provenance.snapshot_id == snapshot.id,
+                Provenance.kind.in_(GRAPH_EVIDENCE_KINDS),
+            )
+        )
+        snapshot.run_id = run.id
+        snapshot.analysis_version = graph.analysis_version
+        snapshot.tree_sha = source_snapshot.tree_sha
+        db.flush()
+        _persist_manifest(db, repository, snapshot, source_snapshot)
+        _write_graph_rows(db, run, repository, snapshot, graph)
+        snapshot.published_at = utc_now()
+        return snapshot
+    snapshot = RepositorySnapshot(
+        id=_stable_id("snap", run.workspace_id, repository.id, graph.repository_sha),
+        workspace_id=run.workspace_id,
+        repository_id=repository.id,
+        commit_sha=graph.repository_sha,
+        tree_sha=source_snapshot.tree_sha,
+        run_id=run.id,
+        analysis_version=graph.analysis_version,
+        published_at=None,
+    )
+    db.add(snapshot)
+    db.flush()
+    _persist_manifest(db, repository, snapshot, source_snapshot)
+
+    _write_graph_rows(db, run, repository, snapshot, graph)
     snapshot.published_at = utc_now()
     return snapshot
 
@@ -835,7 +875,8 @@ def run_structural_analysis(
             existing = _published_snapshot(
                 db, workspace_id, repository_id, source_snapshot.commit_sha
             )
-            if existing:
+            stale = existing is not None and existing.analysis_version != CURRENT_GRAPH_VERSION
+            if existing and not stale:
                 _persist_manifest(db, current_repository, existing, source_snapshot)
                 _persist_evolution(db, current_repository, existing, evolution)
                 backfilled = _persist_knowledge(db, current_repository, existing, knowledge_files)
@@ -912,7 +953,16 @@ def run_structural_analysis(
             )
             if current_run is None or current_repository is None:
                 raise GitOperationError("Analysis scope disappeared before publication.")
-            snapshot = _persist_graph(db, current_run, current_repository, source_snapshot, graph)
+            snapshot = _persist_graph(
+                db,
+                current_run,
+                current_repository,
+                source_snapshot,
+                graph,
+                replace=_published_snapshot(
+                    db, workspace_id, repository_id, source_snapshot.commit_sha
+                ),
+            )
             _persist_evolution(db, current_repository, snapshot, evolution)
             chunk_count = _persist_knowledge(db, current_repository, snapshot, knowledge_files)
             bug_count = _persist_bug_links(db, current_repository, snapshot, szz)
