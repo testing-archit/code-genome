@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import shutil
+from collections import Counter
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -21,7 +22,9 @@ from code_genome_git import (
     RepositoryManifestFile,
     RepositorySourceFile,
     RepositorySourceSnapshot,
+    SzzResult,
     sync_github_repository,
+    trace_bug_introductions,
 )
 from code_genome_git import (
     RepositoryCommit as GitCommit,
@@ -35,6 +38,7 @@ from ..database import SessionLocal
 from ..models import (
     AnalysisRun,
     BranchRef,
+    BugLink,
     CoChangeEdge,
     FileChange,
     FileHotspot,
@@ -63,6 +67,7 @@ from .ml import train_snapshot_models
 
 SessionFactory = Callable[[], Session]
 logger = logging.getLogger(__name__)
+SZZ_MAX_FIX_COMMITS = 60
 
 
 class SyncRepository(Protocol):
@@ -83,7 +88,15 @@ def _stable_id(prefix: str, *parts: object) -> str:
     return f"{prefix}_{hashlib.sha256(material.encode()).hexdigest()[:24]}"
 
 
-def _set_progress(session_factory: SessionFactory, run_id: str, progress: float) -> None:
+def _set_progress(
+    session_factory: SessionFactory,
+    run_id: str,
+    progress: float,
+    stage: str | None = None,
+    counts: dict[str, int] | None = None,
+    message: str | None = None,
+) -> None:
+    """Record the live stage, counts, and a human-readable line the UI can poll."""
     with session_factory() as db:
         run = db.get(AnalysisRun, run_id)
         if run is None or run.state in {"SUCCEEDED", "FAILED"}:
@@ -91,6 +104,12 @@ def _set_progress(session_factory: SessionFactory, run_id: str, progress: float)
         run.state = "RUNNING"
         run.progress = progress
         run.started_at = run.started_at or utc_now()
+        if stage is not None:
+            run.stage = stage
+        if counts:
+            run.progress_counts = {**(run.progress_counts or {}), **counts}
+        if message:
+            run.diagnostics = [*(run.diagnostics or []), message][-20:]
         db.commit()
 
 
@@ -565,6 +584,86 @@ def _persist_knowledge(
     return stored
 
 
+def _trace_bugs(
+    git_repository: GitRepository, commits: tuple[GitCommit, ...], evolution: EvolutionResult
+) -> SzzResult:
+    """Run bounded SZZ-lite. Best effort: a failure yields no links, never a failed run."""
+    sizes = {item.sha: (len(item.files), item.churn) for item in evolution.commits}
+    try:
+        return trace_bug_introductions(
+            git_repository,
+            commits,
+            max_fix_commits=SZZ_MAX_FIX_COMMITS,
+            commit_sizes=sizes,
+        )
+    except Exception:  # noqa: BLE001 - bug tracing must not break publication
+        logger.exception("szz_tracing_failed")
+        return SzzResult(
+            links=(),
+            fix_shas=(),
+            examined_fixes=0,
+            limitations=("Bug tracing failed for this snapshot; no bug links were stored.",),
+        )
+
+
+def _persist_bug_links(
+    db: Session, repository: Repository, snapshot: RepositorySnapshot, result: SzzResult
+) -> int:
+    """Store SZZ-lite candidate links with provenance. Idempotent per snapshot."""
+    existing = db.scalar(select(BugLink.id).where(BugLink.snapshot_id == snapshot.id).limit(1))
+    if existing is not None or not result.links:
+        return 0
+    stored = 0
+    for link in result.links:
+        first = link.blamed_ranges[0][0] if link.blamed_ranges else None
+        last = link.blamed_ranges[-1][1] if link.blamed_ranges else None
+        provenance_id = _stable_id(
+            "ev", snapshot.id, link.fix_sha, link.path, link.introducing_sha, "szz"
+        )
+        if db.get(Provenance, provenance_id) is None:
+            db.add(
+                Provenance(
+                    id=provenance_id,
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    snapshot_id=snapshot.id,
+                    kind="szz_blame",
+                    repository_sha=link.parent_sha,
+                    file_path=link.path,
+                    start_line=first,
+                    end_line=last,
+                    extractor_version=result.analysis_version,
+                )
+            )
+            db.flush()
+        db.add(
+            BugLink(
+                id=_stable_id("bug", snapshot.id, link.fix_sha, link.introducing_sha, link.path),
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                snapshot_id=snapshot.id,
+                provenance_id=provenance_id,
+                fix_sha=link.fix_sha,
+                introducing_sha=link.introducing_sha,
+                path=link.path,
+                lines=link.lines,
+                confidence=link.confidence,
+                evidence_json={
+                    "fix_sha": link.fix_sha,
+                    "parent_sha": link.parent_sha,
+                    "path": link.path,
+                    "fix_removed_ranges": [list(item) for item in link.fix_ranges],
+                    "blamed_ranges": [list(item) for item in link.blamed_ranges],
+                    "bulk_introducing_commit": link.bulk,
+                    "shallow_boundary": link.boundary,
+                },
+                analysis_version=result.analysis_version,
+            )
+        )
+        stored += 1
+    return stored
+
+
 def _train_models(
     session_factory: SessionFactory, workspace_id: str, repository_id: str, commit_sha: str
 ) -> None:
@@ -621,7 +720,9 @@ def run_structural_analysis(
             )
         )
 
-    _set_progress(session_factory, run_id, 0.1)
+    _set_progress(
+        session_factory, run_id, 0.05, "fetching", message="Fetching the repository mirror."
+    )
     try:
         credential = _load_git_credential(
             connection, workspace_id=workspace_id, repository_id=repository_id
@@ -641,16 +742,75 @@ def run_structural_analysis(
             max_file_bytes=settings.max_source_file_bytes,
             max_total_bytes=settings.max_source_total_bytes,
         )
+        _set_progress(
+            session_factory,
+            run_id,
+            0.15,
+            "indexing",
+            {
+                "files_indexed": len(source_snapshot.manifest),
+                "source_files": len(source_snapshot.files),
+            },
+            f"Indexed {len(source_snapshot.manifest)} files "
+            f"({len(source_snapshot.files)} JS/TS source files).",
+        )
         refs = git_repository.list_branch_refs()
         commits = git_repository.read_commit_history(
             branch, max_commits=settings.max_history_commits
+        )
+        _set_progress(
+            session_factory,
+            run_id,
+            0.2,
+            "mining_history",
+            {"commits_mined": len(commits)},
+            f"Mined {len(commits)} commits and {len(refs)} branches.",
         )
         evolution = analyze_evolution(
             mine_commit_changes(git_repository.git_directory, tuple(item.sha for item in commits)),
             tuple(item.path for item in source_snapshot.files),
         )
+        _set_progress(
+            session_factory,
+            run_id,
+            0.3,
+            "evolution",
+            {
+                "co_change_pairs": len(evolution.co_changes),
+                "modules_discovered": len(evolution.modules),
+            },
+            f"Discovered {len(evolution.modules)} modules and "
+            f"{len(evolution.co_changes)} co-change pairs.",
+        )
         knowledge_files = _knowledge_files(git_repository, source_snapshot)
-        _set_progress(session_factory, run_id, 0.4)
+        with session_factory() as db:
+            reused = _published_snapshot(
+                db, workspace_id, repository_id, source_snapshot.commit_sha
+            )
+            already_traced = reused is not None and (
+                db.scalar(select(BugLink.id).where(BugLink.snapshot_id == reused.id).limit(1))
+                is not None
+            )
+        if already_traced:
+            szz = SzzResult(links=(), fix_shas=(), examined_fixes=0)
+        else:
+            _set_progress(
+                session_factory,
+                run_id,
+                0.35,
+                "tracing_bugs",
+                message="Tracing bug-fix commits back to candidate introducing commits.",
+            )
+            szz = _trace_bugs(git_repository, commits, evolution)
+            _set_progress(
+                session_factory,
+                run_id,
+                0.4,
+                "tracing_bugs",
+                {"fix_commits": len(szz.fix_shas), "bug_links_traced": len(szz.links)},
+                f"Traced {len(szz.links)} candidate bug links from {len(szz.fix_shas)} "
+                "fix commits.",
+            )
 
         with session_factory() as db:
             current_repository = db.scalar(
@@ -679,6 +839,7 @@ def run_structural_analysis(
                 _persist_manifest(db, current_repository, existing, source_snapshot)
                 _persist_evolution(db, current_repository, existing, evolution)
                 backfilled = _persist_knowledge(db, current_repository, existing, knowledge_files)
+                bug_backfill = _persist_bug_links(db, current_repository, existing, szz)
                 current_run = db.scalar(
                     select(AnalysisRun).where(
                         AnalysisRun.id == run_id,
@@ -689,6 +850,7 @@ def run_structural_analysis(
                     current_run.snapshot_sha = existing.commit_sha
                     current_run.version = existing.analysis_version
                     current_run.state = "SUCCEEDED"
+                    current_run.stage = "complete"
                     current_run.progress = 1.0
                     current_run.completed_at = utc_now()
                     current_run.diagnostics = [
@@ -698,17 +860,42 @@ def run_structural_analysis(
                             if backfilled
                             else []
                         ),
+                        *(
+                            [f"Added {bug_backfill} candidate bug links to the snapshot."]
+                            if bug_backfill
+                            else []
+                        ),
                     ]
                     db.commit()
                 return
             db.commit()
 
+        _set_progress(
+            session_factory,
+            run_id,
+            0.5,
+            "parsing",
+            message=f"Parsing {len(source_snapshot.files)} JS/TS source files.",
+        )
         analyses: list[FileAnalysis] = [
             analyze_source(source_file.path, source_file.content)
             for source_file in source_snapshot.files
         ]
         graph = build_structural_graph(repository_id, source_snapshot.commit_sha, analyses)
-        _set_progress(session_factory, run_id, 0.7)
+        edge_counts = Counter(edge.kind for edge in graph.edges)
+        _set_progress(
+            session_factory,
+            run_id,
+            0.7,
+            "publishing",
+            {
+                "files_parsed": len(analyses),
+                "dependencies_mapped": edge_counts["IMPORTS"],
+                "call_edges": edge_counts["CALLS"],
+            },
+            f"Parsed {len(analyses)} files; mapped {edge_counts['IMPORTS']} dependencies and "
+            f"{edge_counts['CALLS']} candidate calls.",
+        )
 
         with session_factory() as db:
             current_run = db.scalar(
@@ -728,11 +915,18 @@ def run_structural_analysis(
             snapshot = _persist_graph(db, current_run, current_repository, source_snapshot, graph)
             _persist_evolution(db, current_repository, snapshot, evolution)
             chunk_count = _persist_knowledge(db, current_repository, snapshot, knowledge_files)
+            bug_count = _persist_bug_links(db, current_repository, snapshot, szz)
             current_run.snapshot_sha = source_snapshot.commit_sha
             current_run.version = graph.analysis_version
             current_run.state = "SUCCEEDED"
+            current_run.stage = "complete"
             current_run.progress = 1.0
             current_run.completed_at = utc_now()
+            current_run.progress_counts = {
+                **(current_run.progress_counts or {}),
+                "knowledge_chunks": chunk_count,
+                "bug_links_traced": bug_count,
+            }
             current_run.diagnostics = [
                 f"Published {len(graph.nodes)} nodes and {len(graph.edges)} edges from "
                 f"{len(analyses)} source files.",
@@ -743,6 +937,9 @@ def run_structural_analysis(
                 f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
                 f"Stored {chunk_count} cited knowledge chunks from {len(knowledge_files)} "
                 "docs, manifests, and source files.",
+                f"Traced {bug_count} candidate bug-introducing links from "
+                f"{len(szz.fix_shas)} fix commits ({szz.analysis_version}; heuristic).",
+                *szz.limitations,
             ]
             db.commit()
         _train_models(session_factory, workspace_id, repository_id, source_snapshot.commit_sha)

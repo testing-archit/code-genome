@@ -1,4 +1,5 @@
 import hashlib
+import re
 from collections.abc import Iterator
 from pathlib import PurePosixPath
 from typing import Literal
@@ -7,9 +8,18 @@ import tree_sitter_javascript
 import tree_sitter_typescript
 from tree_sitter import Language, Node, Parser
 
-from .types import Diagnostic, ExportFact, FileAnalysis, ImportFact, SourceSpan, SymbolFact
+from .types import (
+    CallFact,
+    Diagnostic,
+    ExportFact,
+    FileAnalysis,
+    FileMetrics,
+    ImportFact,
+    SourceSpan,
+    SymbolFact,
+)
 
-ANALYZER_VERSION = "tree-sitter-js-ts@0.1.0"
+ANALYZER_VERSION = "tree-sitter-js-ts@0.2.0"
 
 LanguageName = Literal["javascript", "typescript", "tsx"]
 SYMBOL_TYPES: dict[str, Literal["function", "class", "method", "interface", "type", "enum"]] = {
@@ -25,6 +35,30 @@ SYMBOL_TYPES: dict[str, Literal["function", "class", "method", "interface", "typ
     "enum_declaration": "enum",
 }
 FUNCTION_VALUES = {"arrow_function", "function_expression", "generator_function"}
+FUNCTION_NODES = {
+    "function_declaration",
+    "generator_function_declaration",
+    "function_expression",
+    "function",
+    "generator_function",
+    "arrow_function",
+    "method_definition",
+}
+DECISION_NODES = {
+    "if_statement",
+    "for_statement",
+    "for_in_statement",
+    "for_of_statement",
+    "while_statement",
+    "do_statement",
+    "switch_case",
+    "catch_clause",
+    "ternary_expression",
+}
+LOGICAL_OPERATORS = {"&&", "||", "??"}
+MAX_CALLS_PER_FILE = 2_000
+HTTP_CLIENTS = {"axios", "got", "ky", "superagent", "request", "needle", "ofetch", "$fetch"}
+_URL_HOST = re.compile(r"^https?://([A-Za-z0-9.-]{1,253})(?::\d{1,5})?(?:[/?#]|$)")
 
 
 # Grammars are loaded once per process rather than once per file.
@@ -262,6 +296,83 @@ def _extract_diagnostics(root: Node) -> tuple[Diagnostic, ...]:
     return tuple(sorted(diagnostics, key=lambda item: (item.span, item.code)))
 
 
+def _compute_metrics(root: Node) -> FileMetrics:
+    code_lines: set[int] = set()
+    functions = 0
+    decisions = 0
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "comment":
+            continue
+        if node.child_count == 0:
+            if node.end_byte > node.start_byte and not node.is_missing:
+                code_lines.update(range(node.start_point.row, node.end_point.row + 1))
+            continue
+        if node.type in FUNCTION_NODES:
+            functions += 1
+        elif node.type in DECISION_NODES:
+            decisions += 1
+        elif node.type == "binary_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is not None and operator.type in LOGICAL_OPERATORS:
+                decisions += 1
+        stack.extend(node.children)
+    return FileMetrics(loc=len(code_lines), complexity=1 + decisions, functions=functions)
+
+
+def _literal_host(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type not in {"string", "template_string"}:
+        return None
+    match = _URL_HOST.match(_unquote(node, source))
+    return match.group(1).lower() if match else None
+
+
+def _extract_calls(root: Node, source: bytes) -> tuple[CallFact, ...]:
+    calls: list[CallFact] = []
+    for node in _walk(root):
+        if len(calls) >= MAX_CALLS_PER_FILE:
+            break
+        if node.type == "call_expression":
+            target = node.child_by_field_name("function")
+        elif node.type == "new_expression":
+            target = node.child_by_field_name("constructor")
+        else:
+            continue
+        if target is None:
+            continue
+        receiver: str | None = None
+        if target.type == "identifier":
+            callee = _text(target, source)
+            if callee in {"require", "import"}:
+                continue
+        elif target.type == "member_expression":
+            obj = target.child_by_field_name("object")
+            prop = target.child_by_field_name("property")
+            if prop is None or obj is None:
+                continue
+            callee = _text(prop, source)
+            # Keep simple receivers verbatim ("db", "this", "prisma.user"); anything else is an
+            # opaque expression that must never be resolved as a bare call.
+            receiver_text = _text(obj, source)
+            receiver = (
+                receiver_text
+                if obj.type in {"identifier", "this", "member_expression"}
+                and len(receiver_text) <= 120
+                and "(" not in receiver_text
+                else "<expression>"
+            )
+        else:
+            continue
+        host = None
+        if callee == "fetch" or receiver in HTTP_CLIENTS or callee in HTTP_CLIENTS:
+            arguments = node.child_by_field_name("arguments")
+            first = arguments.named_children[0] if arguments and arguments.named_children else None
+            host = _literal_host(first, source)
+        calls.append(CallFact(callee=callee, receiver=receiver, span=_span(node), url_host=host))
+    return tuple(sorted(calls, key=lambda item: (item.span, item.callee)))
+
+
 def analyze_source(path: str, source: bytes | str) -> FileAnalysis:
     """Extract deterministic JS/TS facts without executing repository source."""
     normalized_path = str(PurePosixPath(path))
@@ -280,4 +391,6 @@ def analyze_source(path: str, source: bytes | str) -> FileAnalysis:
         exports=_extract_exports(root, source_bytes),
         symbols=_extract_symbols(root, source_bytes),
         diagnostics=_extract_diagnostics(root),
+        calls=_extract_calls(root, source_bytes),
+        metrics=_compute_metrics(root),
     )

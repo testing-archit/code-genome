@@ -2,12 +2,34 @@ import hashlib
 import posixpath
 from pathlib import PurePosixPath
 
-from code_genome_analyzers import FileAnalysis, ImportFact, SourceSpan
+from code_genome_analyzers import CallFact, FileAnalysis, ImportFact, SourceSpan, SymbolFact
 
 from .types import EvidenceRef, GenomeDiagnostic, GenomeEdge, GenomeGraph, GenomeNode
 
-GRAPH_BUILDER_VERSION = "structural-genome@0.1.0"
+GRAPH_BUILDER_VERSION = "structural-genome@0.2.0"
 SOURCE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+CALLABLE_KINDS = {"function", "class", "method"}
+MAX_CALL_EDGES_PER_FILE = 300
+# Call resolution confidence. No type checking happens, so every CALLS edge is a candidate:
+# an import binding to an exported declaration is the strongest static signal; a bare name
+# match within the same file is weaker (shadowing is not analysed).
+CALL_CONFIDENCE_IMPORT_NAMED = 0.9
+CALL_CONFIDENCE_IMPORT_INDIRECT = 0.85
+CALL_CONFIDENCE_LOCAL_NAME = 0.7
+CALL_CONFIDENCE_THIS_METHOD = 0.6
+# Member-call names that usually indicate data-store reads or writes (ORMs, drivers, KV).
+DATA_READ_VERBS = {
+    "findMany", "findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "findOne",
+    "findById", "findAll", "findAndCountAll", "aggregate", "countDocuments", "groupBy",
+    "select", "selectFrom", "hget", "hgetall", "mget", "smembers", "lrange", "zrange",
+    "getDoc", "getDocs", "onSnapshot", "scan", "getItem", "query",
+}  # fmt: skip
+DATA_WRITE_VERBS = {
+    "create", "createMany", "insert", "insertOne", "insertMany", "insertInto", "update",
+    "updateOne", "updateMany", "upsert", "delete", "deleteOne", "deleteMany", "deleteFrom",
+    "destroy", "save", "bulkCreate", "hset", "hdel", "lpush", "rpush", "sadd", "zadd", "del",
+    "setDoc", "addDoc", "updateDoc", "deleteDoc", "putItem", "updateItem", "deleteItem",
+}  # fmt: skip
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
@@ -86,6 +108,144 @@ def _resolve_import(source_path: str, item: ImportFact, known_paths: set[str]) -
     )
 
 
+def _exported_symbol(
+    target: FileAnalysis, name: str, symbol_facts: dict[str, list[tuple[SymbolFact, str]]]
+) -> str | None:
+    """Return the callable symbol a file exports under ``name`` ("default" for default)."""
+    local_names = [item.local_name for item in target.exports if item.name == name]
+    for local_name in local_names:
+        for symbol, symbol_id in symbol_facts.get(target.path, []):
+            if symbol.name == local_name and symbol.kind in CALLABLE_KINDS:
+                return symbol_id
+    return None
+
+
+def _enclosing_symbol(
+    span: SourceSpan, declared: list[tuple[SymbolFact, str]]
+) -> tuple[SymbolFact, str] | None:
+    """Innermost callable declaration whose source range contains ``span``."""
+    best: tuple[SymbolFact, str] | None = None
+    for symbol, symbol_id in declared:
+        if symbol.kind not in CALLABLE_KINDS:
+            continue
+        inside = (symbol.span.start_line, symbol.span.start_column) <= (
+            span.start_line,
+            span.start_column,
+        ) and (span.end_line, span.end_column) <= (symbol.span.end_line, symbol.span.end_column)
+        if inside and (best is None or best[0].span <= symbol.span):
+            best = (symbol, symbol_id)
+    return best
+
+
+def _import_bindings(
+    analysis: FileAnalysis,
+    by_path: dict[str, FileAnalysis],
+    known_paths: set[str],
+    symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
+) -> tuple[dict[str, tuple[str, float]], dict[str, FileAnalysis]]:
+    """Map local identifiers bound by relative ESM imports to exported callable symbols."""
+    bindings: dict[str, tuple[str, float]] = {}
+    namespaces: dict[str, FileAnalysis] = {}
+    for imported in analysis.imports:
+        if imported.kind != "esm":
+            continue
+        resolved = _resolve_import(analysis.path, imported, known_paths)
+        if resolved is None:
+            continue
+        target = by_path[resolved]
+        for name in imported.names:
+            if name.startswith("* as "):
+                namespaces[name.removeprefix("* as ")] = target
+                continue
+            original, _, alias = name.partition(" as ")
+            local = alias or original
+            symbol_id = _exported_symbol(target, original, symbol_facts)
+            if symbol_id is not None:
+                bindings[local] = (symbol_id, CALL_CONFIDENCE_IMPORT_NAMED)
+                continue
+            if not alias:
+                # ``import X from`` and ``import { X } from`` share a shape in the extractor,
+                # so fall back to the default export when no named export matches.
+                default_id = _exported_symbol(target, "default", symbol_facts)
+                if default_id is not None:
+                    bindings[local] = (default_id, CALL_CONFIDENCE_IMPORT_INDIRECT)
+    return bindings, namespaces
+
+
+def _resolve_call(
+    call: CallFact,
+    bindings: dict[str, tuple[str, float]],
+    namespaces: dict[str, FileAnalysis],
+    local_functions: dict[str, str],
+    methods: dict[str, str],
+    symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
+) -> tuple[str, float] | None:
+    if call.receiver is None:
+        if call.callee in bindings:
+            return bindings[call.callee]
+        if call.callee in local_functions:
+            return local_functions[call.callee], CALL_CONFIDENCE_LOCAL_NAME
+        return None
+    if call.receiver == "this":
+        if call.callee in methods:
+            return methods[call.callee], CALL_CONFIDENCE_THIS_METHOD
+        return None
+    namespace = namespaces.get(call.receiver)
+    if namespace is not None:
+        symbol_id = _exported_symbol(namespace, call.callee, symbol_facts)
+        if symbol_id is not None:
+            return symbol_id, CALL_CONFIDENCE_IMPORT_INDIRECT
+    return None
+
+
+def _add_call_edges(
+    repository_id: str,
+    snapshot_sha: str,
+    analysis: FileAnalysis,
+    by_path: dict[str, FileAnalysis],
+    known_paths: set[str],
+    file_node_ids: dict[str, str],
+    symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
+    edges: dict[str, GenomeEdge],
+    evidence: dict[str, EvidenceRef],
+) -> None:
+    """Emit candidate CALLS edges (caller symbol or file -> callee symbol) with provenance."""
+    bindings, namespaces = _import_bindings(analysis, by_path, known_paths, symbol_facts)
+    declared = symbol_facts.get(analysis.path, [])
+    local_functions = {
+        symbol.name: symbol_id
+        for symbol, symbol_id in declared
+        if symbol.kind in {"function", "class"}
+    }
+    methods = {symbol.name: symbol_id for symbol, symbol_id in declared if symbol.kind == "method"}
+    added = 0
+    for call in analysis.calls:
+        if added >= MAX_CALL_EDGES_PER_FILE:
+            break
+        target = _resolve_call(call, bindings, namespaces, local_functions, methods, symbol_facts)
+        if target is None:
+            continue
+        target_id, confidence = target
+        enclosing = _enclosing_symbol(call.span, declared)
+        source_id = enclosing[1] if enclosing else file_node_ids[analysis.path]
+        if source_id == target_id:
+            continue
+        edge_id = _stable_id("edge", repository_id, snapshot_sha, "CALLS", source_id, target_id)
+        if edge_id in edges:
+            continue
+        call_evidence = _range_evidence(repository_id, snapshot_sha, analysis, call.span, "call")
+        evidence[call_evidence.id] = call_evidence
+        edges[edge_id] = GenomeEdge(
+            id=edge_id,
+            kind="CALLS",
+            from_node=source_id,
+            to_node=target_id,
+            confidence=confidence,
+            evidence_id=call_evidence.id,
+        )
+        added += 1
+
+
 def build_structural_graph(
     repository_id: str, snapshot_sha: str, files: list[FileAnalysis]
 ) -> GenomeGraph:
@@ -105,6 +265,7 @@ def build_structural_graph(
     diagnostics: list[GenomeDiagnostic] = []
     file_node_ids: dict[str, str] = {}
     symbols_by_file: dict[str, dict[str, list[str]]] = {}
+    symbol_facts: dict[str, list[tuple[SymbolFact, str]]] = {}
 
     for analysis in ordered_files:
         file_evidence = _file_evidence(repository_id, snapshot_sha, analysis)
@@ -119,6 +280,20 @@ def build_structural_graph(
                 "language": analysis.language,
                 "content_sha256": analysis.content_sha256,
                 "parse_status": "PARTIAL" if analysis.diagnostics else "COMPLETE",
+                "loc": analysis.metrics.loc,
+                "complexity": analysis.metrics.complexity,
+                "functions": analysis.metrics.functions,
+                "data_reads": sum(
+                    1 for call in analysis.calls if call.receiver and call.callee in DATA_READ_VERBS
+                ),
+                "data_writes": sum(
+                    1
+                    for call in analysis.calls
+                    if call.receiver and call.callee in DATA_WRITE_VERBS
+                ),
+                "external_hosts": sorted(
+                    {call.url_host for call in analysis.calls if call.url_host}
+                )[:10],
             },
             evidence_ids=(file_evidence.id,),
         )
@@ -164,6 +339,7 @@ def build_structural_graph(
                 evidence_id=symbol_evidence.id,
             )
             symbols_by_name.setdefault(symbol.name, []).append(symbol_id)
+            symbol_facts.setdefault(analysis.path, []).append((symbol, symbol_id))
         symbols_by_file[analysis.path] = symbols_by_name
 
         for diagnostic in analysis.diagnostics:
@@ -268,6 +444,20 @@ def build_structural_graph(
                 confidence=1.0,
                 evidence_id=imported_evidence.id,
             )
+
+    by_path = {item.path: item for item in ordered_files}
+    for analysis in ordered_files:
+        _add_call_edges(
+            repository_id,
+            snapshot_sha,
+            analysis,
+            by_path,
+            known_paths,
+            file_node_ids,
+            symbol_facts,
+            edges,
+            evidence,
+        )
 
     extractor_version = ordered_files[0].analyzer_version if ordered_files else "none"
     return GenomeGraph(

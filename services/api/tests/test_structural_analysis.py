@@ -124,7 +124,19 @@ def test_publishes_and_serves_an_immutable_structural_graph(
         assert run.snapshot_sha == expected_sha
         assert snapshot is not None and snapshot.published_at is not None
         assert db.scalar(select(func.count()).select_from(GraphNode)) == 3
-        assert db.scalar(select(func.count()).select_from(GraphEdge)) == 3
+        # DECLARES + EXPORTS + IMPORTS, plus one candidate CALLS edge (index.ts -> format).
+        assert db.scalar(select(func.count()).select_from(GraphEdge)) == 4
+        calls = db.scalar(select(GraphEdge).where(GraphEdge.type == "CALLS"))
+        assert calls is not None and 0 < calls.confidence < 1
+        file_node = db.scalar(select(GraphNode).where(GraphNode.natural_key == "src/format.ts"))
+        assert file_node is not None
+        assert {"loc", "complexity", "functions"} <= set(file_node.properties_json)
+        assert run.stage == "complete"
+        assert run.progress_counts["files_indexed"] == 2
+        assert run.progress_counts["files_parsed"] == 2
+        assert run.progress_counts["commits_mined"] == 1
+        assert run.progress_counts["dependencies_mapped"] == 1
+        assert run.progress_counts["bug_links_traced"] == 0
         assert db.scalar(select(func.count()).select_from(BranchRef)) == 1
         assert db.scalar(select(func.count()).select_from(RepositoryCommit)) == 1
         assert db.scalar(select(func.count()).select_from(FileManifestEntry)) == 2

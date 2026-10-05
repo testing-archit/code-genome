@@ -46,7 +46,7 @@ export type GraphNode = {
 
 export type GraphEdge = {
   id: string;
-  type: "DECLARES" | "EXPORTS" | "IMPORTS";
+  type: "DECLARES" | "EXPORTS" | "IMPORTS" | "CALLS";
   from_node: string;
   to_node: string;
   confidence: number;
@@ -789,4 +789,244 @@ export type LinkResultV2 = LinkResult & {
 export type MlOverviewV3 = Omit<MlOverviewWithInstability, "tasks"> & {
   tasks: Omit<MlOverviewWithInstability["tasks"], "defect_risk" | "modules" | "change_impact"> &
     Partial<{ defect_risk: Task<DefectResultV3>; modules: Task<ModulesResultV2>; change_impact: Task<LinkResultV2> }>;
+};
+
+// ---- Code metrics, candidate calls, SZZ bug links, genome graph, timeline, live progress.
+
+/** Graph edge types including candidate CALLS (confidence < 1, resolved without type checking). */
+export type GraphEdgeTypeV2 = GraphEdge["type"] | "CALLS";
+
+/** FILE node `properties` written by structural-genome@0.2.0. */
+export type FileNodeMetrics = {
+  language: "javascript" | "typescript" | "tsx";
+  content_sha256: string;
+  parse_status: "COMPLETE" | "PARTIAL";
+  /** Non-blank lines holding at least one non-comment token. */
+  loc: number;
+  /** 1 + decision points (if, loops, case, catch, ternary, &&, ||, ??). */
+  complexity: number;
+  /** Function, method, and arrow-function declarations. */
+  functions: number;
+  data_reads: number;
+  data_writes: number;
+  external_hosts: string[];
+};
+
+/** Fields added to GET /analyses/{id} for live progress. */
+export type AnalysisStage =
+  | "fetching"
+  | "indexing"
+  | "mining_history"
+  | "evolution"
+  | "tracing_bugs"
+  | "parsing"
+  | "publishing"
+  | "complete";
+
+export type AnalysisProgressCounts = Partial<{
+  files_indexed: number;
+  source_files: number;
+  commits_mined: number;
+  co_change_pairs: number;
+  modules_discovered: number;
+  fix_commits: number;
+  bug_links_traced: number;
+  files_parsed: number;
+  dependencies_mapped: number;
+  call_edges: number;
+  knowledge_chunks: number;
+}>;
+
+export type AnalysisRunWithProgress = AnalysisRun & {
+  stage?: AnalysisStage | null;
+  progress_counts?: AnalysisProgressCounts;
+};
+
+export type ArchitectureRole =
+  | "api"
+  | "service"
+  | "data"
+  | "contract"
+  | "ui"
+  | "util"
+  | "config"
+  | "infra/scripts"
+  | "test"
+  | "unknown";
+
+export type ComponentDatastore = {
+  name: string;
+  packages: string[];
+  files: string[];
+  reads: number;
+  writes: number;
+  access: "read" | "write" | "read_write" | "unknown";
+  via: "direct" | "via import";
+  evidence_ids: string[];
+  inferred: true;
+};
+
+export type ComponentIntegration = {
+  name: string;
+  package: string | null;
+  host: string | null;
+  files: string[];
+  evidence_ids: string[];
+};
+
+/** Optional fields added to GET /repositories/{id}/module-graph nodes. */
+export type ComponentNodeExtras = {
+  role?: ArchitectureRole;
+  role_signal?: string;
+  datastores?: ComponentDatastore[];
+  integrations?: ComponentIntegration[];
+  contributors?: Array<{ name: string; commits: number; share: number }>;
+  commits?: number;
+  bug_fixes?: number;
+  last_changed?: string | null;
+};
+
+export type GenomeNodeKind =
+  | "file"
+  | "component"
+  | "function"
+  | "class"
+  | "developer"
+  | "commit"
+  | "external"
+  | "datastore"
+  | "external_api";
+
+export type GenomeEdgeKind =
+  | "IMPORTS"
+  | "CALLS"
+  | "DECLARES"
+  | "DEPENDS_ON"
+  | "BELONGS_TO_MODULE"
+  | "CO_CHANGED_WITH"
+  | "MODIFIED_BY"
+  | "AUTHORED_BY"
+  | "OWNED_BY"
+  | "SEMANTICALLY_RELATED_TO"
+  | "INTRODUCED_BUG"
+  | "FIXED_BY"
+  | "READS_FROM"
+  | "WRITES_TO"
+  | "USES_DATASTORE"
+  | "CALLS_API";
+
+export type GenomeNode = {
+  /** "file:<path>", "component:<name>", "symbol:<graph node id>", "developer:<hash>", "commit:<sha>", "external:<pkg>", "datastore:<name>", "external_api:<name>". */
+  id: string;
+  kind: GenomeNodeKind;
+  label: string;
+  properties: Record<string, unknown>;
+  evidence_ids: string[];
+  inferred: boolean;
+};
+
+export type GenomeEdge = {
+  id: string;
+  kind: GenomeEdgeKind;
+  source: string;
+  target: string;
+  weight: number;
+  confidence: number;
+  inferred: boolean;
+  /** "evidence:<provenance id>" or "commit:<sha>". */
+  evidence_ids: string[];
+};
+
+/** GET /repositories/{id}/genome?focus=&limit= */
+export type GenomeGraph = {
+  scope: {
+    repository_id: string;
+    snapshot_id: string;
+    snapshot_sha: string;
+    analysis_version: string;
+    sources: string[];
+  };
+  version: string;
+  focus: string | null;
+  focus_node_id: string | null;
+  nodes: GenomeNode[];
+  edges: GenomeEdge[];
+  node_counts: Partial<Record<GenomeNodeKind, number>>;
+  edge_counts: Partial<Record<GenomeEdgeKind, number>>;
+  total_nodes: number;
+  total_edges: number;
+  truncated: boolean;
+  limitations: string[];
+};
+
+export type BugIntroduction = {
+  introducing_sha: string;
+  subject: string | null;
+  author: string | null;
+  authored_at: string | null;
+  path: string;
+  lines: number;
+  confidence: number;
+  evidence_id: string;
+  evidence: {
+    fix_sha: string;
+    parent_sha: string;
+    path: string;
+    fix_removed_ranges: Array<[number, number]>;
+    blamed_ranges: Array<[number, number]>;
+    bulk_introducing_commit: boolean;
+    shallow_boundary: boolean;
+  };
+  bulk_commit: boolean;
+  shallow_boundary: boolean;
+};
+
+/** GET /repositories/{id}/bugs?path=&limit= (SZZ-lite candidates, not proof). */
+export type BugHistory = {
+  repository_id: string;
+  snapshot_sha: string;
+  analysis_version: string;
+  fix_rule: string;
+  path: string | null;
+  fixes: Array<{
+    fix_sha: string;
+    subject: string | null;
+    author: string | null;
+    authored_at: string | null;
+    files: string[];
+    introducing: BugIntroduction[];
+  }>;
+  files: Array<{
+    path: string;
+    fix_commits: number;
+    introducing_commits: number;
+    fix_shas: string[];
+    introducing_shas: string[];
+    lines: number;
+  }>;
+  counts: { fix_commits: number; bug_links: number; files: number };
+  limitations: string[];
+};
+
+export type TimelinePoint = {
+  /** ISO date (Monday for weeks, first day for months), UTC. */
+  bucket_start: string;
+  commits: number;
+  churn: number;
+  fix_commits: number;
+  authors: number;
+  bug_introducing_commits: number;
+};
+
+/** GET /repositories/{id}/timeline?bucket=week|month&path= */
+export type EvolutionTimeline = {
+  repository_id: string;
+  snapshot_sha: string;
+  version: string;
+  bucket: "week" | "month";
+  path: string | null;
+  buckets: string[];
+  overall: TimelinePoint[];
+  components: Array<{ name: string; role: ArchitectureRole | string; points: TimelinePoint[] }>;
+  limitations: string[];
 };

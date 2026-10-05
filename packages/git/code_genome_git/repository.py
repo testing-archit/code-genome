@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 SUPPORTED_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 BRANCH_PATTERN = re.compile(r"^(?!/|.*(?:\.\.|//|@\{|\\|\s))[^~^:?*\[]+(?<![/.])$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")
+_BLAME_HEADER = re.compile(r"^([0-9a-f]{40}(?:[0-9a-f]{24})?) (\d+) (\d+)(?: \d+)?$")
 
 
 class GitOperationError(RuntimeError):
@@ -396,6 +398,137 @@ class GitRepository:
                 )
             )
         return tuple(commits)
+
+    def _object_id(self, value: str) -> str:
+        if not OBJECT_ID_PATTERN.fullmatch(value):
+            raise ValueError("Expected a full hexadecimal Git object ID")
+        return value
+
+    def commit_parents(self, commit_sha: str) -> tuple[str, ...]:
+        output = self._run(
+            ["rev-list", "--parents", "-n", "1", self._object_id(commit_sha), "--"],
+            max_output_bytes=10_000,
+        )
+        parts = output.decode("ascii", errors="strict").split()
+        if (
+            not parts
+            or parts[0] != commit_sha
+            or not all(OBJECT_ID_PATTERN.fullmatch(item) for item in parts)
+        ):
+            raise GitOperationError("Git returned malformed parent metadata.")
+        return tuple(parts[1:])
+
+    def commit_size(self, commit_sha: str) -> tuple[int, int]:
+        """Return (files touched, lines added + deleted) for a commit; binary files count 0."""
+        output = self._run(
+            [
+                "diff-tree",
+                "--root",
+                "-r",
+                "--no-commit-id",
+                "--numstat",
+                self._object_id(commit_sha),
+            ],
+            max_output_bytes=20_000_000,
+        )
+        files = 0
+        lines = 0
+        for record in output.decode("utf-8", errors="replace").splitlines():
+            parts = record.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            files += 1
+            lines += sum(int(part) for part in parts[:2] if part.isdigit())
+        return files, lines
+
+    def removed_lines(
+        self, parent_sha: str, commit_sha: str, *, max_output_bytes: int = 4_000_000
+    ) -> dict[str, list[tuple[int, str]]]:
+        """Lines deleted or modified by ``commit_sha`` relative to ``parent_sha``.
+
+        Keys are paths in the parent tree; values are (parent line number, content) pairs.
+        Whitespace-only changes are ignored. Binary and newly added files yield nothing.
+        """
+        output = self._run(
+            [
+                "diff",
+                "-U0",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--ignore-all-space",
+                "--find-renames",
+                self._object_id(parent_sha),
+                self._object_id(commit_sha),
+                "--",
+            ],
+            max_output_bytes=max_output_bytes,
+        )
+        removed: dict[str, list[tuple[int, str]]] = {}
+        current: str | None = None
+        in_header = False
+        old_line = 0
+        for raw in output.split(b"\n"):
+            if raw.startswith(b"diff --git "):
+                current, in_header, old_line = None, True, 0
+                continue
+            if in_header and raw.startswith(b"--- "):
+                # Quoted paths (unusual characters) are skipped rather than unescaped.
+                name = raw[4:].decode("utf-8", errors="surrogateescape")
+                current = name[2:] if name.startswith("a/") else None
+                if current is not None and (len(current) > 1_000 or "\t" in current):
+                    current = None
+                continue
+            if raw.startswith(b"@@ "):
+                in_header = False
+                match = _HUNK_HEADER.match(raw.decode("ascii", errors="replace"))
+                old_line = int(match.group(1)) if match else 0
+                continue
+            if in_header or current is None or old_line <= 0:
+                continue
+            if raw.startswith(b"-"):
+                content = raw[1:].decode("utf-8", errors="replace")
+                removed.setdefault(current, []).append((old_line, content))
+                old_line += 1
+        return removed
+
+    def blame_lines(
+        self, commit_sha: str, path: str, ranges: Sequence[tuple[int, int]]
+    ) -> list[tuple[int, str, bool]]:
+        """Attribute lines of ``path`` at ``commit_sha`` to the commits that last changed them.
+
+        Returns (line number, commit SHA, is_boundary) per line. ``is_boundary`` marks a commit
+        at the edge of the fetched (shallow) history, whose attribution is weak.
+        """
+        if not ranges or len(path) > 1_000 or path.startswith(("/", "-")) or "\0" in path:
+            return []
+        arguments = ["blame", "--porcelain", "-w"]
+        for start, end in ranges:
+            if start < 1 or end < start:
+                raise ValueError("Blame ranges must be positive and ordered")
+            arguments += ["-L", f"{start},{end}"]
+        output = self._run(
+            [*arguments, self._object_id(commit_sha), "--", path],
+            max_output_bytes=max(200_000, sum(end - start + 1 for start, end in ranges) * 4_000),
+        )
+        attributed: list[tuple[int, str, bool]] = []
+        boundaries: set[str] = set()
+        pending: tuple[int, str] | None = None
+        for raw in output.split(b"\n"):
+            if raw.startswith(b"\t"):
+                if pending is not None:
+                    attributed.append((pending[0], pending[1], pending[1] in boundaries))
+                pending = None
+                continue
+            line = raw.decode("utf-8", errors="replace")
+            header = _BLAME_HEADER.match(line)
+            if header:
+                pending = (int(header.group(3)), header.group(1))
+            elif line == "boundary" and pending is not None:
+                boundaries.add(pending[1])
+        return [
+            (number, sha, sha in boundaries or boundary) for number, sha, boundary in attributed
+        ]
 
     def read_blobs(
         self,

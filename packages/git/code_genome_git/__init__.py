@@ -13,8 +13,17 @@ from .repository import (
     sync_github_repository,
     validate_ref,
 )
+from .szz import (
+    SZZ_VERSION,
+    BugLinkCandidate,
+    SzzResult,
+    is_fix_message,
+    trace_bug_introductions,
+)
 
 __all__ = [
+    "SZZ_VERSION",
+    "BugLinkCandidate",
     "GitOperationError",
     "GitCredential",
     "GitRepository",
@@ -24,8 +33,11 @@ __all__ = [
     "RepositoryManifestFile",
     "RepositorySourceFile",
     "RepositorySourceSnapshot",
+    "SzzResult",
     "clone_github_repository",
+    "is_fix_message",
     "normalize_github_url",
     "sync_github_repository",
+    "trace_bug_introductions",
     "validate_ref",
 ]

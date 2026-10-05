@@ -133,6 +133,9 @@ class AnalysisRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Live pipeline stage and human-readable counts ("files_indexed", "bug_links_traced", ...).
+    stage: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    progress_counts: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
 
     repository: Mapped[Repository] = relationship(back_populates="analyses")
 
@@ -624,3 +627,38 @@ class KnowledgeChunkRecord(Base):
     end_line: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
     analysis_version: Mapped[str] = mapped_column(String(80))
+
+
+class BugLink(Base):
+    """A candidate bug-introducing commit for lines removed by a fix commit (SZZ-lite).
+
+    Heuristic evidence, not proof. ``evidence_json`` keeps the parent/fix line ranges that
+    the link was derived from; ``provenance_id`` cites the blamed range in the parent commit.
+    """
+
+    __tablename__ = "bug_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id", "fix_sha", "introducing_sha", "path", name="uq_snapshot_bug_link"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="CASCADE"))
+    fix_sha: Mapped[str] = mapped_column(String(64), index=True)
+    introducing_sha: Mapped[str] = mapped_column(String(64), index=True)
+    path: Mapped[str] = mapped_column(String(1000), index=True)
+    lines: Mapped[int] = mapped_column(Integer)
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    analysis_version: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

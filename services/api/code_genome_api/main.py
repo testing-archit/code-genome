@@ -19,6 +19,7 @@ from .routes import (
     conversations,
     delivery_reports,
     exports,
+    genome,
     graph,
     health,
     insights,
@@ -143,3 +144,4 @@ app.include_router(operations.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(voice.router, prefix="/api/v1")
 app.include_router(ml.router, prefix="/api/v1")
+app.include_router(genome.router, prefix="/api/v1")

@@ -4,7 +4,7 @@ from typing import Any, Literal
 from code_genome_analyzers import SourceSpan
 
 NodeKind = Literal["FILE", "SYMBOL", "MODULE"]
-EdgeKind = Literal["DECLARES", "EXPORTS", "IMPORTS"]
+EdgeKind = Literal["DECLARES", "EXPORTS", "IMPORTS", "CALLS"]
 
 
 @dataclass(frozen=True)

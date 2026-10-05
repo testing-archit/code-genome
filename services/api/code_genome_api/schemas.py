@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -84,6 +84,17 @@ class AnalysisResponse(BaseModel):
     completed_at: datetime | None
     error_code: str | None
     error_detail: str | None
+    # Live pipeline stage (e.g. "fetching", "mining_history", "tracing_bugs", "parsing",
+    # "publishing", "complete") and counts: files_indexed, source_files, files_parsed,
+    # commits_mined, dependencies_mapped, modules_discovered, knowledge_chunks,
+    # fix_commits, bug_links_traced, call_edges.
+    stage: str | None = None
+    progress_counts: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("progress_counts", mode="before")
+    @classmethod
+    def default_counts(cls, value: object) -> object:
+        return {} if value is None else value
 
 
 class HealthResponse(BaseModel):
@@ -728,6 +739,50 @@ class RepositoryOverviewResponse(BaseModel):
     unstable_components: list[UnstableComponentResponse] | None = None
 
 
+class ModuleContributorResponse(BaseModel):
+    name: str
+    commits: int
+    share: float
+
+
+class ModuleDatastoreResponse(BaseModel):
+    """A data store a component reaches, detected from imports (inferred)."""
+
+    name: str
+    packages: list[str]
+    files: list[str]
+    reads: int
+    writes: int
+    access: Literal["read", "write", "read_write", "unknown"]
+    via: Literal["direct", "via import"]
+    evidence_ids: list[str]
+    inferred: bool = True
+
+
+class ModuleIntegrationResponse(BaseModel):
+    """An external service a component uses: an SDK import or a literal URL host."""
+
+    name: str
+    package: str | None
+    host: str | None
+    files: list[str]
+    evidence_ids: list[str]
+
+
+ArchitectureRole = Literal[
+    "api",
+    "service",
+    "data",
+    "contract",
+    "ui",
+    "util",
+    "config",
+    "infra/scripts",
+    "test",
+    "unknown",
+]
+
+
 class ModuleNodeResponse(BaseModel):
     name: str
     files: int
@@ -739,6 +794,14 @@ class ModuleNodeResponse(BaseModel):
     description: str
     riskiest: list[str]
     paths: list[str]
+    role: ArchitectureRole = "unknown"
+    role_signal: str = ""
+    datastores: list[ModuleDatastoreResponse] = Field(default_factory=list)
+    integrations: list[ModuleIntegrationResponse] = Field(default_factory=list)
+    contributors: list[ModuleContributorResponse] = Field(default_factory=list)
+    commits: int = 0
+    bug_fixes: int = 0
+    last_changed: datetime | None = None
 
 
 class ModuleLinkResponse(BaseModel):
@@ -769,3 +832,150 @@ class GeneratedDocumentsResponse(BaseModel):
     version: str
     generated_at: datetime
     documents: list[GeneratedDocumentResponse]
+
+
+# ---------------------------------------------------------------- genome graph, bugs, timeline
+
+GenomeNodeKind = Literal[
+    "file",
+    "component",
+    "function",
+    "class",
+    "developer",
+    "commit",
+    "external",
+    "datastore",
+    "external_api",
+]
+GenomeEdgeKind = Literal[
+    "IMPORTS",
+    "CALLS",
+    "DECLARES",
+    "DEPENDS_ON",
+    "BELONGS_TO_MODULE",
+    "CO_CHANGED_WITH",
+    "MODIFIED_BY",
+    "AUTHORED_BY",
+    "OWNED_BY",
+    "SEMANTICALLY_RELATED_TO",
+    "INTRODUCED_BUG",
+    "FIXED_BY",
+    "READS_FROM",
+    "WRITES_TO",
+    "USES_DATASTORE",
+    "CALLS_API",
+]
+
+
+class GenomeNodeResponse(BaseModel):
+    id: str
+    kind: GenomeNodeKind
+    label: str
+    properties: dict[str, Any]
+    evidence_ids: list[str]
+    inferred: bool
+
+
+class GenomeEdgeResponse(BaseModel):
+    id: str
+    kind: GenomeEdgeKind
+    source: str
+    target: str
+    weight: float
+    confidence: float
+    inferred: bool
+    evidence_ids: list[str]
+
+
+class GenomeScope(BaseModel):
+    repository_id: str
+    snapshot_id: str
+    snapshot_sha: str
+    analysis_version: str
+    sources: list[str]
+
+
+class GenomeResponse(BaseModel):
+    scope: GenomeScope
+    version: str
+    focus: str | None
+    focus_node_id: str | None
+    nodes: list[GenomeNodeResponse]
+    edges: list[GenomeEdgeResponse]
+    node_counts: dict[str, int]
+    edge_counts: dict[str, int]
+    total_nodes: int
+    total_edges: int
+    truncated: bool
+    limitations: list[str]
+
+
+class BugIntroductionResponse(BaseModel):
+    introducing_sha: str
+    subject: str | None
+    author: str | None
+    authored_at: datetime | None
+    path: str
+    lines: int
+    confidence: float
+    evidence_id: str
+    evidence: dict[str, Any]
+    bulk_commit: bool
+    shallow_boundary: bool
+
+
+class BugFixResponse(BaseModel):
+    fix_sha: str
+    subject: str | None
+    author: str | None
+    authored_at: datetime | None
+    files: list[str]
+    introducing: list[BugIntroductionResponse]
+
+
+class FileBugHistoryResponse(BaseModel):
+    path: str
+    fix_commits: int
+    introducing_commits: int
+    fix_shas: list[str]
+    introducing_shas: list[str]
+    lines: int
+
+
+class BugHistoryResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    analysis_version: str
+    fix_rule: str
+    path: str | None
+    fixes: list[BugFixResponse]
+    files: list[FileBugHistoryResponse]
+    counts: dict[str, int]
+    limitations: list[str]
+
+
+class TimelinePointResponse(BaseModel):
+    bucket_start: date
+    commits: int
+    churn: int
+    fix_commits: int
+    authors: int
+    bug_introducing_commits: int
+
+
+class ComponentTimelineResponse(BaseModel):
+    name: str
+    role: str
+    points: list[TimelinePointResponse]
+
+
+class TimelineResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    version: str
+    bucket: Literal["week", "month"]
+    path: str | None
+    buckets: list[date]
+    overall: list[TimelinePointResponse]
+    components: list[ComponentTimelineResponse]
+    limitations: list[str]

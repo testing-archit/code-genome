@@ -59,3 +59,31 @@ def test_analysis_is_deterministic_and_rejects_unsafe_paths() -> None:
 
     with pytest.raises(ValueError, match="within the repository"):
         analyze_source("../outside.ts", source)
+
+
+def test_metrics_count_code_lines_functions_and_decisions() -> None:
+    result = analyze_source(
+        "src/m.js",
+        "/* block\n   comment */\n// line\n\nconst f = (x) => x ? 1 : 2;\n"
+        "function g(items) {\n  for (const i of items) {\n    switch (i) { case 1: break; }\n"
+        "  }\n  try { h(); } catch (e) { return e || null; }\n}\n",
+    )
+    assert result.metrics.loc == 7
+    assert result.metrics.functions == 2
+    # 1 + ternary + for-of + case + catch + ||
+    assert result.metrics.complexity == 6
+
+
+def test_calls_record_receivers_and_literal_hosts() -> None:
+    result = analyze_source(
+        "src/c.ts",
+        'import x from "./x";\nconst r = require("./r");\n'
+        'fetch("https://api.example.com/v1");\naxios.get(`https://hooks.slack.com/x`);\n'
+        "db.user.findMany();\nthis.go();\nmake()();\n",
+    )
+    facts = {(item.callee, item.receiver, item.url_host) for item in result.calls}
+    assert ("fetch", None, "api.example.com") in facts
+    assert ("get", "axios", "hooks.slack.com") in facts
+    assert ("findMany", "db.user", None) in facts
+    assert ("go", "this", None) in facts
+    assert all(item.callee not in {"require", "import"} for item in result.calls)

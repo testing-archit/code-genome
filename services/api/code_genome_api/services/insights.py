@@ -10,17 +10,20 @@
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 
 import networkx as nx
+from code_genome_git import is_fix_message
 from code_genome_ml import group_components
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import (
+    BugLink,
     CoChangeEdge,
+    FileChange,
     FileHotspot,
     FileManifestEntry,
     GraphEdge,
@@ -100,6 +103,9 @@ class SnapshotFacts:
     component_of: dict[str, str] = field(default_factory=dict)
     instability: list[InstabilityFact] = field(default_factory=list)
     instability_model: str | None = None
+    file_properties: dict[str, dict[str, Any]] = field(default_factory=dict)
+    file_changes: list[FileChange] = field(default_factory=list)
+    bug_links: list[BugLink] = field(default_factory=list)
 
     @property
     def internal_imports(self) -> list[tuple[str, str, str]]:
@@ -148,14 +154,17 @@ def load_facts(
             imports.append((source.natural_key, target.natural_key, edge.provenance_id))
     symbols: dict[str, list[str]] = defaultdict(list)
     file_evidence: dict[str, str] = {}
+    file_properties: dict[str, dict[str, Any]] = {}
     for node in nodes.values():
         if node.kind == "SYMBOL":
             name = node.properties_json.get("name")
             path = str(node.properties_json.get("path") or node.natural_key.split("#", 1)[0])
             if isinstance(name, str):
                 symbols[path].append(name)
-        elif node.kind == "FILE" and node.evidence_ids:
-            file_evidence[node.natural_key] = node.evidence_ids[0]
+        elif node.kind == "FILE":
+            file_properties[node.natural_key] = node.properties_json or {}
+            if node.evidence_ids:
+                file_evidence[node.natural_key] = node.evidence_ids[0]
     modules = sorted(
         db.scalars(
             select(ModuleCandidate).where(
@@ -210,7 +219,24 @@ def load_facts(
         if PurePosixPath(path).suffix.lower() in _CODE_SUFFIXES
         and not any(part.lower() in SKIPPED_DIRECTORIES for part in PurePosixPath(path).parts)
     ]
+    file_changes = list(
+        db.scalars(
+            select(FileChange).where(
+                FileChange.snapshot_id == snapshot.id, FileChange.workspace_id == workspace
+            )
+        )
+    )
+    bug_links = list(
+        db.scalars(
+            select(BugLink)
+            .where(BugLink.snapshot_id == snapshot.id, BugLink.workspace_id == workspace)
+            .order_by(BugLink.fix_sha, BugLink.path, BugLink.introducing_sha)
+        )
+    )
     return SnapshotFacts(
+        file_properties=file_properties,
+        file_changes=file_changes,
+        bug_links=bug_links,
         component_of=components(source_paths),
         repository_name=repository_name,
         snapshot=snapshot,
@@ -349,6 +375,14 @@ class ModuleNode:
     description: str
     riskiest: list[str]
     paths: list[str] = field(default_factory=list)
+    role: str = "unknown"
+    role_signal: str = ""
+    datastores: list[dict[str, Any]] = field(default_factory=list)
+    integrations: list[dict[str, Any]] = field(default_factory=list)
+    contributors: list[dict[str, Any]] = field(default_factory=list)
+    commits: int = 0
+    bug_fixes: int = 0
+    last_changed: datetime | None = None
 
 
 @dataclass
@@ -370,6 +404,329 @@ def group_risk(facts: SnapshotFacts, paths: list[str]) -> tuple[float | None, li
         return None, []
     top = scored[:3]
     return round(sum(score for score, _ in top) / len(top), 4), [path for _, path in top]
+
+
+# ---------------------------------------------------------------- architecture roles
+
+ROLES_VERSION = "roles-heuristic@1"
+ROLE_ORDER = (
+    "api",
+    "service",
+    "data",
+    "contract",
+    "ui",
+    "util",
+    "config",
+    "infra/scripts",
+    "test",
+    "unknown",
+)
+_ROLE_SEGMENTS: dict[str, str] = {
+    **dict.fromkeys(
+        ("tests", "test", "__tests__", "spec", "specs", "e2e", "cypress", "playwright"), "test"
+    ),
+    **dict.fromkeys(("contracts", "contract", "solidity"), "contract"),
+    **dict.fromkeys(
+        (
+            "routes", "route", "controllers", "controller", "handlers", "handler", "api",
+            "pages", "app", "endpoints", "server", "resolvers", "graphql", "middleware",
+            "middlewares", "webhooks",
+        ),
+        "api",
+    ),
+    **dict.fromkeys(
+        (
+            "models", "model", "schema", "schemas", "db", "database", "repositories",
+            "repository", "migrations", "entities", "entity", "prisma", "dao", "orm", "drizzle",
+        ),
+        "data",
+    ),
+    **dict.fromkeys(
+        (
+            "services", "service", "domain", "usecases", "use-cases", "core", "workers",
+            "worker", "jobs", "queues", "features", "modules",
+        ),
+        "service",
+    ),
+    **dict.fromkeys(
+        (
+            "components", "component", "views", "view", "ui", "layouts", "layout", "widgets",
+            "screens", "hooks", "styles", "templates",
+        ),
+        "ui",
+    ),
+    **dict.fromkeys(("config", "configs", "settings", "env", "constants"), "config"),
+    **dict.fromkeys(
+        ("scripts", "script", "infra", "deploy", "tools", "bin", "ci", ".github", "docker"),
+        "infra/scripts",
+    ),
+    **dict.fromkeys(("utils", "util", "helpers", "helper", "lib", "common", "shared"), "util"),
+}  # fmt: skip
+_API_FRAMEWORKS = {
+    "express", "fastify", "koa", "hono", "@nestjs/common", "@hapi/hapi", "next", "restify",
+    "@trpc/server", "apollo-server", "@apollo/server", "graphql-yoga",
+}  # fmt: skip
+_UI_PACKAGES = {"react", "react-dom", "vue", "svelte", "solid-js", "preact", "@angular/core"}
+
+# Static import → data store. Detected from imports only; reads/writes are inferred.
+DATASTORE_PACKAGES: dict[str, str] = {
+    "prisma": "Prisma (SQL database)",
+    "@prisma/client": "Prisma (SQL database)",
+    "pg": "PostgreSQL",
+    "postgres": "PostgreSQL",
+    "@neondatabase/serverless": "PostgreSQL",
+    "@vercel/postgres": "PostgreSQL",
+    "mysql": "MySQL",
+    "mysql2": "MySQL",
+    "mongoose": "MongoDB",
+    "mongodb": "MongoDB",
+    "sequelize": "SQL database (Sequelize)",
+    "typeorm": "SQL database (TypeORM)",
+    "knex": "SQL database (Knex)",
+    "drizzle-orm": "SQL database (Drizzle)",
+    "kysely": "SQL database (Kysely)",
+    "redis": "Redis",
+    "ioredis": "Redis",
+    "@upstash/redis": "Redis",
+    "sqlite": "SQLite",
+    "sqlite3": "SQLite",
+    "better-sqlite3": "SQLite",
+    "@supabase/supabase-js": "Supabase",
+    "firebase": "Firebase",
+    "firebase-admin": "Firebase",
+    "@aws-sdk/client-dynamodb": "DynamoDB",
+    "@aws-sdk/lib-dynamodb": "DynamoDB",
+    "@aws-sdk/client-s3": "Amazon S3",
+    "@google-cloud/firestore": "Firestore",
+    "@elastic/elasticsearch": "Elasticsearch",
+}
+INTEGRATION_PACKAGES: dict[str, str] = {
+    "stripe": "Stripe",
+    "@stripe/stripe-js": "Stripe",
+    "openai": "OpenAI",
+    "@anthropic-ai/sdk": "Anthropic",
+    "@google/genai": "Google Gemini",
+    "@google/generative-ai": "Google Gemini",
+    "ethers": "Ethereum (ethers)",
+    "web3": "Ethereum (web3)",
+    "viem": "Ethereum (viem)",
+    "wagmi": "Ethereum (wagmi)",
+    "twilio": "Twilio",
+    "aws-sdk": "AWS",
+    "nodemailer": "SMTP email",
+    "@sendgrid/mail": "SendGrid",
+    "resend": "Resend",
+    "@octokit/rest": "GitHub API",
+    "@octokit/core": "GitHub API",
+    "octokit": "GitHub API",
+    "@slack/web-api": "Slack",
+    "discord.js": "Discord",
+    "@sentry/node": "Sentry",
+    "@sentry/nextjs": "Sentry",
+    "@sentry/react": "Sentry",
+    "posthog-js": "PostHog",
+    "posthog-node": "PostHog",
+    "algoliasearch": "Algolia",
+    "pusher": "Pusher",
+    "cloudinary": "Cloudinary",
+    "@clerk/nextjs": "Clerk",
+    "@auth0/nextjs-auth0": "Auth0",
+    "@vercel/blob": "Vercel Blob",
+    "replicate": "Replicate",
+    "langchain": "LangChain",
+    "@pinecone-database/pinecone": "Pinecone",
+}
+
+
+def package_name(specifier: str) -> str | None:
+    """Normalize an import specifier to its npm package name (None for node builtins)."""
+    value = specifier.removeprefix("external:")
+    if value.startswith("node:") or not value:
+        return None
+    parts = value.split("/")
+    return "/".join(parts[:2]) if value.startswith("@") and len(parts) > 1 else parts[0]
+
+
+def _integration_name(package: str) -> str | None:
+    if package in INTEGRATION_PACKAGES:
+        return INTEGRATION_PACKAGES[package]
+    if package.startswith("@aws-sdk/") and package not in DATASTORE_PACKAGES:
+        return "AWS"
+    return None
+
+
+@dataclass
+class ArchitectureFacts:
+    """Per-component roles, data stores, and integrations, each with its deciding signal."""
+
+    roles: dict[str, tuple[str, str]]
+    datastores: dict[str, list[dict[str, Any]]]
+    integrations: dict[str, list[dict[str, Any]]]
+
+
+def _role_for(
+    name: str,
+    paths: list[str],
+    packages: Counter[str],
+    touches_datastore: bool,
+) -> tuple[str, str]:
+    segments = [part.lower() for part in PurePosixPath(name).parts if not part.startswith("(")]
+    for segment in reversed(segments):
+        role = _ROLE_SEGMENTS.get(segment)
+        if role:
+            return role, f"path segment '{segment}'"
+    if paths and sum(1 for path in paths if _TEST_PATH.search(path)) / len(paths) > 0.5:
+        return "test", "most files are test files"
+    frameworks = sorted(set(packages) & _API_FRAMEWORKS)
+    if frameworks:
+        return "api", f"imports {frameworks[0]}"
+    if touches_datastore:
+        return "data", "imports a data-store client"
+    jsx = sum(1 for path in paths if PurePosixPath(path).suffix.lower() in {".tsx", ".jsx"})
+    if paths and jsx / len(paths) > 0.5:
+        return "ui", f"{jsx} of {len(paths)} files are JSX/TSX"
+    ui = sorted(set(packages) & _UI_PACKAGES)
+    if ui:
+        return "ui", f"imports {ui[0]}"
+    return "unknown", "no deterministic path or import signal"
+
+
+def architecture_facts(facts: SnapshotFacts) -> ArchitectureFacts:
+    """Classify each component and detect data stores and integrations from static imports."""
+    members: dict[str, list[str]] = defaultdict(list)
+    for path, name in facts.component_of.items():
+        members[name].append(path)
+    imported_packages: dict[str, dict[str, str]] = defaultdict(dict)  # path -> package -> ev
+    for source, target, evidence in facts.external_imports:
+        package = package_name(target)
+        if package:
+            imported_packages[source].setdefault(package, evidence)
+    # Files that use a data store directly, or through one internal import hop.
+    direct: dict[str, dict[str, str]] = defaultdict(dict)  # path -> store -> evidence
+    for path, file_packages in imported_packages.items():
+        for package, evidence in file_packages.items():
+            if package in DATASTORE_PACKAGES:
+                direct[path].setdefault(DATASTORE_PACKAGES[package], evidence)
+    through: dict[str, dict[str, str]] = defaultdict(dict)
+    for source, target, evidence in facts.internal_imports:
+        for store in direct.get(target, {}):
+            through[source].setdefault(store, evidence)
+
+    roles: dict[str, tuple[str, str]] = {}
+    datastores: dict[str, list[dict[str, Any]]] = {}
+    integrations: dict[str, list[dict[str, Any]]] = {}
+    for name, paths in members.items():
+        packages: Counter[str] = Counter()
+        for path in paths:
+            packages.update(imported_packages.get(path, {}).keys())
+        stores: dict[str, dict[str, Any]] = {}
+        for path in sorted(paths):
+            for kind, mapping in (("direct", direct), ("via import", through)):
+                for store, evidence in mapping.get(path, {}).items():
+                    entry = stores.setdefault(
+                        store,
+                        {
+                            "name": store,
+                            "packages": sorted(
+                                {
+                                    package
+                                    for package, label in DATASTORE_PACKAGES.items()
+                                    if label == store and package in packages
+                                }
+                            ),
+                            "files": [],
+                            "reads": 0,
+                            "writes": 0,
+                            "via": kind,
+                            "evidence_ids": [],
+                        },
+                    )
+                    if path not in entry["files"]:
+                        entry["files"].append(path)
+                        properties = facts.file_properties.get(path, {})
+                        entry["reads"] += int(properties.get("data_reads") or 0)
+                        entry["writes"] += int(properties.get("data_writes") or 0)
+                    if kind == "direct":
+                        entry["via"] = "direct"
+                    if len(entry["evidence_ids"]) < 5:
+                        entry["evidence_ids"].append(f"evidence:{evidence}")
+        for entry in stores.values():
+            entry["access"] = (
+                "read_write"
+                if entry["reads"] and entry["writes"]
+                else "read"
+                if entry["reads"]
+                else "write"
+                if entry["writes"]
+                else "unknown"
+            )
+            entry["files"] = entry["files"][:20]
+            entry["inferred"] = True
+        datastores[name] = sorted(stores.values(), key=lambda item: item["name"])
+
+        found: dict[str, dict[str, Any]] = {}
+        for path in sorted(paths):
+            for package, evidence in imported_packages.get(path, {}).items():
+                label = _integration_name(package)
+                if label is None:
+                    continue
+                entry = found.setdefault(
+                    label,
+                    {"name": label, "package": package, "host": None, "files": [],
+                     "evidence_ids": []},
+                )  # fmt: skip
+                if path not in entry["files"]:
+                    entry["files"].append(path)
+                if len(entry["evidence_ids"]) < 5:
+                    entry["evidence_ids"].append(f"evidence:{evidence}")
+            hosts = facts.file_properties.get(path, {}).get("external_hosts") or []
+            for host in hosts:
+                if not isinstance(host, str) or host in {"localhost", "127.0.0.1"}:
+                    continue
+                entry = found.setdefault(
+                    host,
+                    {"name": host, "package": None, "host": host, "files": [],
+                     "evidence_ids": []},
+                )  # fmt: skip
+                if path not in entry["files"]:
+                    entry["files"].append(path)
+                if path in facts.file_evidence and len(entry["evidence_ids"]) < 5:
+                    entry["evidence_ids"].append(f"evidence:{facts.file_evidence[path]}")
+        for entry in found.values():
+            entry["files"] = entry["files"][:20]
+        integrations[name] = sorted(found.values(), key=lambda item: item["name"])
+        roles[name] = _role_for(name, paths, packages, bool(stores))
+    return ArchitectureFacts(roles=roles, datastores=datastores, integrations=integrations)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def component_history(facts: SnapshotFacts) -> dict[str, dict[str, Any]]:
+    """Contributors, commit and bug-fix counts, and last change per component."""
+    commit_by_sha = {commit.sha: commit for commit in facts.commits}
+    shas_by_component: dict[str, set[str]] = defaultdict(set)
+    for change in facts.file_changes:
+        name = facts.component_of.get(change.path)
+        if name is not None:
+            shas_by_component[name].add(change.commit_sha)
+    history: dict[str, dict[str, Any]] = {}
+    for name, shas in shas_by_component.items():
+        known = [commit_by_sha[sha] for sha in shas if sha in commit_by_sha]
+        authors: Counter[str] = Counter(commit.author_email.lower() for commit in known)
+        names = {commit.author_email.lower(): commit.author_name for commit in known}
+        total = max(1, len(known))
+        history[name] = {
+            "contributors": [
+                {"name": names[email], "commits": count, "share": round(count / total, 4)}
+                for email, count in authors.most_common(5)
+            ],
+            "commits": len(shas),
+            "bug_fixes": sum(1 for commit in known if is_fix_message(commit.message)),
+            "last_changed": max((_as_utc(commit.authored_at) for commit in known), default=None),
+        }
+    return history
 
 
 def module_graph(facts: SnapshotFacts) -> tuple[list[ModuleNode], list[ModuleLink]]:
@@ -412,10 +769,14 @@ def module_graph(facts: SnapshotFacts) -> tuple[list[ModuleNode], list[ModuleLin
     members: dict[str, list[str]] = defaultdict(list)
     for path, name in group_of.items():
         members[name].append(path)
+    architecture = architecture_facts(facts)
+    history = component_history(facts)
     nodes = []
     for name, paths in sorted(members.items()):
         risk, riskiest = group_risk(facts, paths)
         symbols = Counter(symbol for path in paths for symbol in facts.symbols.get(path, []))
+        role, role_signal = architecture.roles.get(name, ("unknown", ""))
+        past = history.get(name, {})
         nodes.append(
             ModuleNode(
                 name=name,
@@ -436,6 +797,14 @@ def module_graph(facts: SnapshotFacts) -> tuple[list[ModuleNode], list[ModuleLin
                 ),
                 riskiest=riskiest,
                 paths=sorted(paths)[:200],
+                role=role,
+                role_signal=role_signal,
+                datastores=architecture.datastores.get(name, []),
+                integrations=architecture.integrations.get(name, []),
+                contributors=past.get("contributors", []),
+                commits=past.get("commits", 0),
+                bug_fixes=past.get("bug_fixes", 0),
+                last_changed=past.get("last_changed"),
             )
         )
     return nodes, sorted(links.values(), key=lambda item: (-item.imports, -item.co_changes))
@@ -509,6 +878,71 @@ def _entry_points(facts: SnapshotFacts) -> list[str]:
     return sorted(candidates, key=lambda path: (-importers[path], path))[:8]
 
 
+_ROLE_TITLES = {
+    "api": "API and entry layer",
+    "service": "Services and domain logic",
+    "data": "Data access",
+    "contract": "Smart contracts",
+    "ui": "User interface",
+    "util": "Shared utilities",
+    "config": "Configuration",
+    "infra/scripts": "Infrastructure and scripts",
+    "test": "Tests",
+    "unknown": "Unclassified",
+}
+
+
+def _architecture_by_role(nodes: list[ModuleNode]) -> list[str]:
+    lines = [
+        "## Architecture by role",
+        "",
+        f"Roles are assigned deterministically ({ROLES_VERSION}) from directory names and "
+        "imports; each entry shows the signal used. Data stores and integrations are detected "
+        "from static imports and literal URLs only.",
+        "",
+    ]
+    by_role: dict[str, list[ModuleNode]] = defaultdict(list)
+    for node in nodes:
+        by_role[node.role].append(node)
+    for role in ROLE_ORDER:
+        members = sorted(by_role.get(role, []), key=lambda item: -item.files)
+        if not members:
+            continue
+        lines += [f"### {_ROLE_TITLES[role]}", ""]
+        lines += [
+            f"- {_code(node.name)} ({node.files} files; {node.role_signal})" for node in members
+        ]
+        lines.append("")
+    stores: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    services: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    for node in nodes:
+        for store in node.datastores:
+            stores[store["name"]].append((node.name, store))
+        for item in node.integrations:
+            services[item["name"]].append((node.name, item))
+    lines += ["### Data stores (inferred from imports)", ""]
+    lines += [
+        f"- **{_plain(name)}** used by "
+        + ", ".join(
+            f"{_code(component)} ({entry['access'].replace('_', '/')}, {entry['via']}; "
+            f"{', '.join(entry['evidence_ids'][:2])})"
+            for component, entry in users
+        )
+        for name, users in sorted(stores.items())
+    ] or ["- No data-store client imports were detected."]
+    lines += ["", "### External integrations (inferred from imports and literal URLs)", ""]
+    lines += [
+        f"- **{_plain(name)}** used by "
+        + ", ".join(
+            f"{_code(component)} ({', '.join(entry['evidence_ids'][:2]) or 'no evidence id'})"
+            for component, entry in users
+        )
+        for name, users in sorted(services.items())
+    ] or ["- No external integrations were detected."]
+    lines.append("")
+    return lines
+
+
 def _architecture(
     facts: SnapshotFacts, nodes: list[ModuleNode], links: list[ModuleLink]
 ) -> list[str]:
@@ -523,6 +957,7 @@ def _architecture(
         f"- {len({c.author_email.lower() for c in facts.commits})} contributors across "
         f"{len(facts.commits)} analysed commits",
         "",
+        *_architecture_by_role(nodes),
         "## Modules",
         "",
         "| Module | Files | Depends on | Used by | Risk |",
@@ -604,10 +1039,11 @@ def _modules_doc(
     return lines
 
 
-def _data_flow(facts: SnapshotFacts, links: list[ModuleLink]) -> list[str]:
+def _data_flow(facts: SnapshotFacts, nodes: list[ModuleNode], links: list[ModuleLink]) -> list[str]:
     lines = [
         "This document follows static imports only. Runtime data flow (network calls, events, "
-        "database reads) is not traced.",
+        "database reads) is not traced; data stores and external services are recognised from "
+        "the client libraries a component imports.",
         "",
         "## Module flow",
         "",
@@ -639,6 +1075,58 @@ def _data_flow(facts: SnapshotFacts, links: list[ModuleLink]) -> list[str]:
         lines.append("")
     if not _entry_points(facts):
         lines.append("No entry points were detected from imports.")
+    lines += ["", *_sink_flows(nodes, links)]
+    return lines
+
+
+def _sink_flows(nodes: list[ModuleNode], links: list[ModuleLink]) -> list[str]:
+    """Static paths from API/UI components to components that reach a store or integration."""
+    lines = [
+        "## Flows into data stores and integrations",
+        "",
+        "Inferred: each line follows static imports between components from an API or UI "
+        "component to a component that imports a data-store client or external service. "
+        "It shows a possible path, not an observed request.",
+        "",
+    ]
+    graph = nx.DiGraph()
+    graph.add_nodes_from(node.name for node in nodes)
+    graph.add_edges_from((link.source, link.target) for link in links if link.imports)
+    roles = {node.name: node.role for node in nodes}
+    sources = [node.name for node in nodes if node.role in {"api", "ui"}]
+    flows: list[str] = []
+    for sink in sorted(nodes, key=lambda item: item.name):
+        targets = [
+            *(
+                f"{store['name']} ({store['access'].replace('_', '/')})"
+                for store in sink.datastores
+            ),
+            *(item["name"] for item in sink.integrations),
+        ]
+        if not targets:
+            continue
+        evidence = [*(e for s in sink.datastores for e in s["evidence_ids"][:1])][:1] + [
+            *(e for s in sink.integrations for e in s["evidence_ids"][:1])
+        ][:1]
+        starts = [name for name in sources if name != sink.name] or [sink.name]
+        paths = []
+        for start in starts:
+            if start == sink.name:
+                paths.append([sink.name])
+                continue
+            try:
+                paths.append(nx.shortest_path(graph, start, sink.name))
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+        if not paths:
+            paths = [[sink.name]]
+        for path in sorted(paths, key=len)[:3]:
+            chain = " → ".join(f"{_code(name)} [{roles.get(name, 'unknown')}]" for name in path)
+            flows.append(
+                f"- {chain} → {', '.join(_plain(item) for item in targets)}"
+                + (f" ({', '.join(evidence)})" if evidence else "")
+            )
+    lines += flows[:20] or ["- No data-store or integration imports were detected."]
     return lines
 
 
@@ -805,7 +1293,11 @@ def generate_documents(facts: SnapshotFacts, generated_at: datetime) -> dict[str
             _architecture(facts, nodes, links),
         ),
         "MODULES.md": ("Modules", sources, _modules_doc(facts, nodes, links)),
-        "DATA_FLOW.md": ("Data flow", "import graph", _data_flow(facts, links)),
+        "DATA_FLOW.md": (
+            "Data flow",
+            "import graph, data-store and integration imports",
+            _data_flow(facts, nodes, links),
+        ),
         "DEPENDENCIES.md": (
             "Dependencies",
             "import graph, package manifests",

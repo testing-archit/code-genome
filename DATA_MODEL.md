@@ -43,6 +43,7 @@
 | `risk_score` | snapshot_id, path, score, feature JSON, rationale, evidence IDs, model version |
 | `grounded_answer` | repository_id, question, extractive answer, evidence IDs, snapshot scope, retrieval version |
 | `answer_feedback` | answer_id, user_id, rating, comment, timestamp |
+| `bug_link` | snapshot_id, fix_sha, introducing_sha, path, lines, confidence, evidence_json (fix/blamed line ranges), provenance_id, analysis_version (`szz-lite@1`); heuristic candidates, not proof |
 
 ## Constraints and indexes
 
