@@ -4,12 +4,17 @@ Every returned item also carries the explainable weighted score (``impact-weight
 0.35 dependency strength + 0.30 co-change confidence + 0.20 import proximity + 0.15 shared
 bug-fix history, with each component in [0, 1] so the UI can show why a file is listed."""
 
+import threading
+from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from code_genome_intelligence import ImpactRelation, rank_impact
 from code_genome_ml import (
     IMPACT_WEIGHTED_VERSION,
     ImpactSignalContext,
+    TrainingInputs,
+    import_centrality,
     keyword_fix_shas,
     predict_impact,
     weighted_impact_score,
@@ -19,8 +24,59 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import CoChangeEdge, GraphEdge, GraphNode, RepositorySnapshot
-from ..schemas import ImpactItemResponse, ImpactSignalsResponse
+from ..schemas import ImpactGraphMetricsResponse, ImpactItemResponse, ImpactSignalsResponse
 from . import ml
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """Per-snapshot history and graph statistics shared by every impact request."""
+
+    inputs: TrainingInputs
+    signals: ImpactSignalContext
+    betweenness: dict[str, float]
+    pagerank: dict[str, float]
+    pagerank_percentile: dict[str, float]
+
+
+# Published snapshots are immutable, so the key (workspace, snapshot, analyzer version, fix
+# set or keyword rule) fully determines the result; a re-analysis or retrained intent model
+# changes the key, and a snapshot rebuilt in place gets a new analysis_version.
+_CACHE_SIZE = 8
+_cache: OrderedDict[tuple[str, str, str, int], _Prepared] = OrderedDict()
+_cache_lock = threading.Lock()
+_KEYWORD_RULE = -1
+
+
+def _prepare(db: Session, snapshot: RepositorySnapshot, fix_shas: set[str] | None) -> _Prepared:
+    """Load (or reuse) history and graph statistics; ``fix_shas=None`` applies the keyword
+    fix rule to the snapshot's own commits."""
+    fix_key = _KEYWORD_RULE if fix_shas is None else hash(frozenset(fix_shas))
+    key = (snapshot.workspace_id, snapshot.id, snapshot.analysis_version, fix_key)
+    with _cache_lock:
+        cached = _cache.get(key)
+        if cached is not None:
+            _cache.move_to_end(key)
+            return cached
+    inputs = ml.training_inputs(db, snapshot)
+    bulk = bulk_commit_shas(inputs.changes, len(inputs.files))
+    signals = ImpactSignalContext(
+        [change for change in inputs.changes if change.commit_sha not in bulk],
+        inputs.imports,
+        keyword_fix_shas(inputs.commits) if fix_shas is None else fix_shas,
+    )
+    betweenness, pagerank = import_centrality(list(inputs.imports))
+    ordered = sorted(pagerank, key=lambda path: pagerank[path])
+    percentile = {
+        path: (index / (len(ordered) - 1) if len(ordered) > 1 else 1.0)
+        for index, path in enumerate(ordered)
+    }
+    prepared = _Prepared(inputs, signals, betweenness, pagerank, percentile)
+    with _cache_lock:
+        _cache[key] = prepared
+        while len(_cache) > _CACHE_SIZE:
+            _cache.popitem(last=False)
+    return prepared
 
 
 def impact_for_paths(
@@ -67,7 +123,6 @@ def impact_for_paths(
         "Absence from this result does not establish absence of runtime impact.",
     ]
     link_model = ml.trained_result(db, snapshot, "change_impact")
-    inputs = ml.training_inputs(db, snapshot)
     intent = ml.trained_result(db, snapshot, "commit_intent")
     if intent is not None:
         fix_shas = {
@@ -76,14 +131,15 @@ def impact_for_paths(
             if isinstance(item, dict) and item.get("intent") == "fix"
         }
         fix_source = "commits the intent model classified as fixes"
+        prepared = _prepare(db, snapshot, fix_shas)
     else:
-        fix_shas = keyword_fix_shas(inputs.commits)
         fix_source = "commits whose message mentions a fix (keyword rule; intent model untrained)"
-    bulk = bulk_commit_shas(inputs.changes, len(inputs.files))
-    signal_context = ImpactSignalContext(
-        [change for change in inputs.changes if change.commit_sha not in bulk],
-        inputs.imports,
-        fix_shas,
+        prepared = _prepare(db, snapshot, None)
+    inputs = prepared.inputs
+    signal_context = prepared.signals
+    limitations.append(
+        "Graph metrics (PageRank, betweenness) describe where the impacted file sits in the "
+        "import graph. They are context for the ranking and are not part of the weighted score."
     )
     limitations.append(
         f"Weighted score ({IMPACT_WEIGHTED_VERSION}) = 0.35 dependency strength + 0.30 "
@@ -149,5 +205,11 @@ def impact_for_paths(
             signals = signal_context.signals(path, item.path)
             item.signals = ImpactSignalsResponse(**signals)
             item.weighted_score = weighted_impact_score(signals)
+            if item.path in prepared.pagerank:
+                item.graph_metrics = ImpactGraphMetricsResponse(
+                    pagerank=round(prepared.pagerank[item.path], 6),
+                    pagerank_percentile=round(prepared.pagerank_percentile[item.path], 4),
+                    betweenness=round(min(1.0, prepared.betweenness.get(item.path, 0.0)), 6),
+                )
         results[path] = sorted(impacted.values(), key=lambda item: (-item.score, item.path))
     return results, limitations

@@ -2,7 +2,7 @@
 
 import time
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .anomaly import detect_anomalies
@@ -14,7 +14,14 @@ from .impact_ranking import SIGNAL_DEFINITIONS, SIGNAL_LABELS, WEIGHTS, evaluate
 from .instability import train_instability_model
 from .intent import train_intent_classifier
 from .modules import discover_modules
-from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, SearchDocument
+from .records import (
+    BugLinkRecord,
+    ChangeRecord,
+    CommitRecord,
+    FileRecord,
+    ImportRecord,
+    SearchDocument,
+)
 from .retrieval import MODEL_VERSION as RETRIEVAL_VERSION
 from .retrieval import evaluate_retrieval
 
@@ -35,6 +42,8 @@ class TrainingInputs:
     changes: list[ChangeRecord]
     files: list[FileRecord]
     imports: list[ImportRecord]
+    # SZZ-lite candidates; used as an alternative defect label for comparison.
+    bug_links: list[BugLinkRecord] = field(default_factory=list)
 
 
 def file_document(record: FileRecord) -> SearchDocument:
@@ -65,7 +74,13 @@ def train_all(inputs: TrainingInputs) -> dict[str, dict[str, Any]]:
     fix_shas = {item.sha for item in intent.predictions if item.intent == "fix"}
 
     defect, seconds = _timed(
-        train_defect_model, inputs.commits, inputs.changes, fix_shas, inputs.files, inputs.imports
+        train_defect_model,
+        inputs.commits,
+        inputs.changes,
+        fix_shas,
+        inputs.files,
+        inputs.imports,
+        inputs.bug_links,
     )
     payload = asdict(defect)
     payload["training_seconds"] = seconds

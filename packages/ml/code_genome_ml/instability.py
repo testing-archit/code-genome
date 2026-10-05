@@ -21,6 +21,11 @@ during fitting. It is compared with two baselines on the same hold-out:
 * historical rate: the component's share of earlier periods with a fix.
 
 The decision threshold for precision/recall/F1 is chosen on training data only.
+
+Recurrent challenger: when PyTorch is installed, a small GRU (``instability-gru@1``) is trained
+on the same samples and scored on the same hold-out. It becomes the champion only if its
+held-out average precision is higher; its explanations then use a reset-to-median attribution
+because it has no coefficients. Without PyTorch the result says the GRU was unavailable.
 """
 
 import math
@@ -42,6 +47,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .components import group_components
+from .instability_gru import GRU_VERSION, GruForecaster, torch_available
 from .records import ChangeRecord, CommitRecord, FileRecord, bulk_commit_shas
 
 MODEL_VERSION = "instability-windowed-logreg@1"
@@ -105,6 +111,7 @@ class InstabilityResult:
         "Logistic-regression coefficient × standardised feature value (log-odds); "
         "an exact additive decomposition of the model's score."
     )
+    champion: str = "logistic_regression"
 
 
 def _assign_periods(
@@ -149,6 +156,10 @@ def _best_threshold(truth: np.ndarray, scores: np.ndarray) -> float:
         if value > best_f1:
             best, best_f1 = float(threshold), float(value)
     return best
+
+
+def _gru() -> GruForecaster:
+    return GruForecaster(WINDOW, len(PERIOD_FEATURES), len(STATIC_FEATURES))
 
 
 def _model() -> Pipeline:
@@ -275,6 +286,7 @@ def train_instability_model(
             dataset,
         )
 
+    champion = "logistic_regression"
     model = _model().fit(x[train], y[train])
     threshold = _best_threshold(y[train], model.predict_proba(x[train])[:, 1])
     rate_scores = np.asarray(rate)
@@ -296,16 +308,49 @@ def train_instability_model(
             **_thresholded(y[test], rate_scores[test] >= rate_threshold),
         }
         metrics["test_base_rate"] = round(float(y[test].mean()), 4)
+        if torch_available():
+            gru = _gru().fit(x[train], y[train])
+            gru_threshold = _best_threshold(y[train], gru.predict_proba(x[train]))
+            gru_probabilities = gru.predict_proba(x[test])
+            metrics["gru"] = {
+                "model_version": GRU_VERSION,
+                **_ranked(y[test], gru_probabilities),
+                **_thresholded(y[test], gru_probabilities >= gru_threshold),
+            }
+            logistic_ap = metrics["model"]["average_precision"]  # type: ignore[index]
+            if metrics["gru"]["average_precision"] > logistic_ap:  # type: ignore[index]
+                champion = "gru"
+            metrics["champion_rule"] = (
+                "The GRU replaces the logistic regression only when its held-out average "
+                "precision is higher."
+            )
+        else:
+            metrics["gru"] = {
+                "model_version": GRU_VERSION,
+                "status": "unavailable",
+                "reason": "PyTorch is not installed (optional 'deep' extra).",
+            }
     else:
         metrics["note"] = "The hold-out periods have a single class, so metrics are unavailable."
+    metrics["champion"] = champion
 
     # Deployment: refit on every labelled sample, forecast the period after the last one.
     final = _model().fit(x, y)
     x_now = np.asarray([row(component, periods - 1) for component in range(len(names))])
-    probabilities = final.predict_proba(x_now)[:, 1]
     scaler: StandardScaler = final.named_steps["scale"]
     coefficients = final.named_steps["model"].coef_[0]
-    contributions = scaler.transform(x_now) * coefficients
+    if champion == "gru":
+        deployed = _gru().fit(x, y)
+        probabilities = deployed.predict_proba(x_now)
+        contributions = deployed.reset_contributions(x_now, np.median(x, axis=0))
+        method = (
+            "GRU (PyTorch): the forecast minus the forecast with only that feature reset to its "
+            "median over all samples (probability points). Not additive."
+        )
+    else:
+        probabilities = final.predict_proba(x_now)[:, 1]
+        contributions = scaler.transform(x_now) * coefficients
+        method = InstabilityResult.contribution_method
     # Absolute bands: with only a handful of components, quantiles would call a 10% forecast
     # "high" simply because it is the largest.
     high, medium = 0.5, 0.25
@@ -346,12 +391,15 @@ def train_instability_model(
     predictions.sort(key=lambda item: (-item.probability, item.component))
     dataset["forecast_after"] = timeline[-1].authored_at.isoformat()
     return InstabilityResult(
-        model_version=MODEL_VERSION,
+        model_version=GRU_VERSION if champion == "gru" else MODEL_VERSION,
         status="trained",
         reason=None,
         dataset=dataset,
         metrics=metrics,
-        coefficients=sorted(
+        # Coefficients describe the deployed model only when it is the logistic regression.
+        coefficients=[]
+        if champion == "gru"
+        else sorted(
             (
                 (name, round(float(value), 4))
                 for name, value in zip(FEATURES, coefficients, strict=True)
@@ -359,4 +407,6 @@ def train_instability_model(
             key=lambda item: -abs(item[1]),
         ),
         predictions=predictions,
+        contribution_method=method,
+        champion=champion,
     )

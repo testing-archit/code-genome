@@ -35,6 +35,16 @@ class FileRecord:
 
 
 @dataclass(frozen=True)
+class BugLinkRecord:
+    """A candidate SZZ-lite link: ``introducing_sha`` last touched lines ``fix_sha`` removed."""
+
+    path: str
+    introducing_sha: str
+    fix_sha: str
+    confidence: float
+
+
+@dataclass(frozen=True)
 class ImportRecord:
     source: str
     target: str

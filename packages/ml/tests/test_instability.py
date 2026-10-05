@@ -1,6 +1,7 @@
 import random
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from code_genome_ml import group_components
 from code_genome_ml.defect import train_defect_model
 from code_genome_ml.instability import MODEL_VERSION, train_instability_model
@@ -142,3 +143,37 @@ def test_defect_model_compares_random_forest_and_explains_the_champion() -> None
     else:
         assert result.contribution_unit == "probability"
         assert all(abs(value) <= 1 for _, value in result.predictions[0].contributions)
+
+
+def test_gru_challenger_is_scored_on_the_same_hold_out() -> None:
+    pytest.importorskip("torch")
+    commits, changes, fixes, files = sequential_history()
+    result = train_instability_model(commits, changes, fixes, files)
+    gru = result.metrics["gru"]
+    assert isinstance(gru, dict) and gru["model_version"] == "instability-gru@1"
+    assert 0 <= gru["average_precision"] <= 1
+    assert result.metrics["champion"] in {"logistic_regression", "gru"}
+    assert result.champion == result.metrics["champion"]
+    if result.champion == "gru":
+        assert result.model_version == "instability-gru@1"
+        assert result.coefficients == []
+        assert "GRU" in result.contribution_method
+    else:
+        assert result.model_version == "instability-windowed-logreg@1"
+        assert result.coefficients
+    # Seeded, CPU-only training is reproducible.
+    again = train_instability_model(commits, changes, fixes, files)
+    assert again.metrics["gru"] == gru
+
+
+def test_without_torch_the_logistic_model_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("code_genome_ml.instability.torch_available", lambda: False)
+    commits, changes, fixes, files = sequential_history()
+    result = train_instability_model(commits, changes, fixes, files)
+    assert result.metrics["gru"] == {
+        "model_version": "instability-gru@1",
+        "status": "unavailable",
+        "reason": "PyTorch is not installed (optional 'deep' extra).",
+    }
+    assert result.champion == "logistic_regression"
+    assert result.model_version == "instability-windowed-logreg@1"

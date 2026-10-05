@@ -544,3 +544,48 @@ def test_push_webhook_queues_only_opted_in_repositories_once(
         audit = db.scalar(select(AuditEvent).where(AuditEvent.actor_id == "system:github-webhook"))
     assert len(runs) == 1 and runs[0].requested_refs == ["main"]
     assert audit is not None and audit.workspace_id == WS
+
+
+def test_impact_history_is_cached_per_snapshot_and_workspace(
+    client: TestClient, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated impact requests reuse one history load; the cache key includes the workspace."""
+    from types import SimpleNamespace
+
+    from code_genome_api.services import impact, ml
+    from code_genome_ml import TrainingInputs
+
+    impact._cache.clear()
+    calls: list[tuple[str, str]] = []
+    real = ml.training_inputs
+
+    def counting(db: Session, snapshot: RepositorySnapshot) -> TrainingInputs:
+        calls.append((snapshot.workspace_id, snapshot.id))
+        return real(db, snapshot)
+
+    monkeypatch.setattr(ml, "training_inputs", counting)
+    repository_id = setup_workspace(client, session_factory)
+    seed_two_snapshots(session_factory, repository_id)
+    url = f"/api/v1/repositories/{repository_id}/impact/change"
+    for _ in range(2):
+        response = client.post(url, headers=auth(), json={"diff": GIT_DIFF, "paths": []})
+        assert response.status_code == 200
+    assert calls == [(WS, f"snap_{HEAD[:6]}")]
+    for item in response.json()["impacted"]:
+        metrics = item["graph_metrics"]
+        if metrics is not None:
+            assert 0 <= metrics["pagerank_percentile"] <= 1
+            assert 0 <= metrics["betweenness"] <= 1
+
+    with session_factory() as db:
+        snapshot = db.get(RepositorySnapshot, f"snap_{HEAD[:6]}")
+        assert snapshot is not None
+        foreign = SimpleNamespace(
+            id=snapshot.id,
+            repository_id=snapshot.repository_id,
+            analysis_version=snapshot.analysis_version,
+            workspace_id="ws_other",
+        )
+        impact._prepare(db, cast(RepositorySnapshot, foreign), None)
+    assert calls[-1] == ("ws_other", f"snap_{HEAD[:6]}")
+    assert len(calls) == 2

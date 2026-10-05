@@ -19,6 +19,14 @@ and, when FILE graph nodes carry them, code metrics (lines of code, cyclomatic c
 estimate, function count). Missing code metrics are dropped, and ``dataset.code_metrics``
 records which were used.
 
+Alternative label (``szz-introducing@1``): when SZZ-lite bug links are supplied, the same
+candidates are also trained and scored on "a candidate bug-introducing commit touched the file
+in the period" (links with confidence >= 0.5 only, so bulk and shallow-boundary links are
+left out). Training labels count only bugs whose fix happened before the test cut-off t2, so
+the training set never uses a fix from the period it is scored on. The deployed model keeps
+the fix-touch label; the two labels define different ground truth, so their scores are reported
+side by side in ``metrics.szz_labels`` rather than used to pick a winner.
+
 Champion/challenger: an L2 logistic regression, a random forest, and a gradient-boosted
 tree ensemble are all scored on the test period against the transparent heuristic
 baseline. The champion is chosen by average precision (ties favour the simpler model).
@@ -59,12 +67,22 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, bulk_commit_shas
+from .records import (
+    BugLinkRecord,
+    ChangeRecord,
+    CommitRecord,
+    FileRecord,
+    ImportRecord,
+    bulk_commit_shas,
+)
 
 MODEL_VERSION = "defect-temporal@3"
 RANDOM_STATE = 7
 MIN_COMMITS = 24
 MIN_CLASS = 3
+LABEL_SOURCE = "fix-touch: a commit classified as a bug fix touched the file in the period"
+SZZ_LABEL_VERSION = "szz-introducing@1"
+SZZ_MIN_CONFIDENCE = 0.5
 
 FEATURES: tuple[str, ...] = (
     "log_commits",
@@ -165,6 +183,13 @@ def _graph_degrees(imports: list[ImportRecord]) -> tuple[dict[str, int], dict[st
     return fan_in, fan_out
 
 
+def import_centrality(
+    imports: list[ImportRecord],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Public view of the betweenness and PageRank the defect model uses as features."""
+    return _centrality(imports)
+
+
 def _centrality(imports: list[ImportRecord]) -> tuple[dict[str, float], dict[str, float]]:
     """Betweenness (sampled above 400 files) and PageRank on the directed import graph.
     Edges point from importer to imported file, so PageRank rewards widely used files."""
@@ -258,6 +283,74 @@ def _labels(
         if change.commit_sha in history.fix_shas
     }
     return np.asarray([1 if path in touched else 0 for path in paths], dtype=int)
+
+
+def _szz_labels(
+    paths: list[str],
+    links: list[BugLinkRecord],
+    commit_time: dict[str, datetime],
+    start: datetime,
+    end: datetime | None,
+    fixed_before: datetime | None,
+) -> np.ndarray:
+    """1 when a confident candidate bug-introducing commit in [start, end) touched the file and
+    (when ``fixed_before`` is set) the bug was already fixed by then, so no future is used."""
+    touched: set[str] = set()
+    for link in links:
+        introduced = commit_time.get(link.introducing_sha)
+        fixed = commit_time.get(link.fix_sha)
+        if link.confidence < SZZ_MIN_CONFIDENCE or introduced is None or fixed is None:
+            continue
+        if introduced < start or (end is not None and introduced >= end):
+            continue
+        if fixed_before is not None and fixed >= fixed_before:
+            continue
+        touched.add(link.path)
+    return np.asarray([1 if path in touched else 0 for path in paths], dtype=int)
+
+
+def _szz_comparison(
+    paths: list[str],
+    links: list[BugLinkRecord],
+    commits: list[CommitRecord],
+    x_train: np.ndarray,
+    x_test: np.ndarray,
+    t1: datetime,
+    t2: datetime,
+) -> dict[str, object]:
+    commit_time = {commit.sha: commit.authored_at for commit in commits}
+    y_train = _szz_labels(paths, links, commit_time, t1, t2, fixed_before=t2)
+    y_test = _szz_labels(paths, links, commit_time, t2, None, fixed_before=None)
+    usable = [link for link in links if link.confidence >= SZZ_MIN_CONFIDENCE]
+    report: dict[str, object] = {
+        "label_version": SZZ_LABEL_VERSION,
+        "label": (
+            "a candidate bug-introducing commit (SZZ-lite, confidence >= "
+            f"{SZZ_MIN_CONFIDENCE}) touched the file in the period; training labels only count "
+            "bugs fixed before the test cut-off"
+        ),
+        "links_supplied": len(links),
+        "links_used": len(usable),
+        "train_positive": int(y_train.sum()),
+        "test_positive": int(y_test.sum()),
+    }
+    if min(y_train.sum(), len(y_train) - y_train.sum()) < MIN_CLASS:
+        report["status"] = "insufficient_data"
+        report["reason"] = "Too few files had confident bug-introducing commits before t2."
+        return report
+    if min(y_test.sum(), len(y_test) - y_test.sum()) < 1:
+        report["status"] = "insufficient_data"
+        report["reason"] = "The test period has a single class under this label."
+        return report
+    flag_rate = float(y_train.mean())
+    report["status"] = "evaluated"
+    report["heuristic_baseline"] = _score(y_test, _heuristic(x_test), flag_rate)
+    for name in CANDIDATES:
+        model = _build(name)
+        model.fit(x_train, y_train)
+        report[name] = _score(y_test, model.predict_proba(x_test)[:, 1], flag_rate)
+    report["test_base_rate"] = round(float(y_test.mean()), 4)
+    return report
 
 
 def _heuristic(matrix: np.ndarray) -> np.ndarray:
@@ -364,6 +457,7 @@ def train_defect_model(
     fix_shas: set[str],
     files: list[FileRecord],
     imports: list[ImportRecord],
+    bug_links: list[BugLinkRecord] | None = None,
 ) -> DefectResult:
     bulk = bulk_commit_shas(changes, len(files))
     changes = [change for change in changes if change.commit_sha not in bulk]
@@ -375,6 +469,7 @@ def train_defect_model(
         "fix_commits": len(fix_shas & changed_shas),
         "bulk_commits_excluded": len(bulk),
         "files": len(files),
+        "label_source": LABEL_SOURCE,
     }
     if len(timeline) < MIN_COMMITS:
         return DefectResult(
@@ -481,6 +576,9 @@ def train_defect_model(
         metrics["test_base_rate"] = round(float(y_test.mean()), 4)
     else:
         metrics["note"] = "The test period has a single class, so held-out metrics are unavailable."
+
+    if bug_links:
+        metrics["szz_labels"] = _szz_comparison(paths, bug_links, commits, x_train, x_test, t1, t2)
 
     # Deployment model: refit the champion on both labelled periods.
     x_all = np.vstack([x_train, x_test])

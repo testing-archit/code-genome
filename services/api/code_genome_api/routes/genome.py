@@ -68,9 +68,14 @@ def get_genome(
     view = genome.select_view(graph, limit=limit, focus_node_id=focus_node_id)
     limitations = [
         "Inferred relationships (inferred: true) are candidates: CALLS are resolved "
-        "statically without type checking; SEMANTICALLY_RELATED_TO is LSA similarity over "
-        "path and symbol names; INTRODUCED_BUG comes from SZZ-lite; data-store and API edges "
-        "come from imported client libraries and literal URLs.",
+        "statically without type checking; SEMANTICALLY_RELATED_TO is "
+        + (
+            "LSA similarity"
+            if graph.semantic_backend == genome.LSA_BACKEND
+            else f"sentence-embedding similarity ({graph.semantic_backend})"
+        )
+        + " over path and symbol names; INTRODUCED_BUG comes from SZZ-lite; data-store and "
+        "API edges come from imported client libraries and literal URLs.",
         "READS_FROM/WRITES_TO are chosen from ORM/driver method names in files that use the "
         "client; USES_DATASTORE means the direction could not be determined.",
         "OWNED_BY is the author with the most analysed commits touching the file or component; "

@@ -5,6 +5,8 @@
 * Change-impact questions ("if I change app.tsx what can break?") resolve the named file
   against the snapshot manifest and use the impact engine. A file that does not exist is
   reported as such, with the closest real paths, instead of guessing.
+* Flow questions ("how does retry work?", "fetch kaise kaam karta hai?") resolve the named
+  file, symbol, or component and walk the genome graph's calls, imports, and data-store edges.
 
 Every routed result cites stored evidence; a model may only rephrase it.
 """
@@ -28,6 +30,8 @@ from ..models import (
     RepositoryCommit,
     RepositorySnapshot,
 )
+from . import genome, insights
+from .flow import FLOW_VERSION, CodeFlow, FlowStep, label, trace_flow, verb
 from .impact import impact_for_paths
 from .knowledge import document_text
 from .ml import trained_result
@@ -448,6 +452,170 @@ def _why_risky(
     )
 
 
+_FLOW = re.compile(
+    r"\bhow (?:does|do|is|are|did)\b.{1,80}?\b(?:work|works|working|handled|implemented|"
+    r"done|flow|flows|run|runs|happen|happens)\b|\bwhat happens (?:when|if|in)\b|"
+    r"\b(?:flow|control flow|call flow|call chain) (?:of|for|in|through)\b|\bwalk me through\b|"
+    r"\btrace (?:the )?(?:flow|calls?)\b|\bkaise (?:kaam|kam|chalta|chalti|work|hota|hoti)\b|"
+    r"कैसे (?:काम|चलता|होता)",
+    re.IGNORECASE,
+)
+_GENERIC = {
+    "index", "main", "utils", "types", "test", "this", "that", "does", "work", "works", "what",
+    "when", "happens", "project", "repo", "repository", "code", "flow", "kaise", "kaam", "karta",
+    "karti", "hota", "through", "with", "from", "handled", "implemented", "function", "class",
+}  # fmt: skip
+
+
+_TEST_PARTS = {"test", "tests", "__tests__", "test-d", "spec", "specs", "e2e", "fixtures"}
+
+
+def _is_test_path(path: str) -> bool:
+    pure = PurePosixPath(path)
+    return bool(_TEST_PARTS & set(pure.parts[:-1])) or any(
+        marker in pure.name for marker in (".test.", ".spec.", "_test.")
+    )
+
+
+def _source_first(path: str) -> tuple[bool, int, int, str]:
+    return (_is_test_path(path), path.count("/"), len(path), path)
+
+
+def is_flow_question(question: str) -> bool:
+    return bool(_FLOW.search(question))
+
+
+def flow_target(
+    question: str, paths: list[str], symbols: dict[str, str], components: dict[str, list[str]]
+) -> str | None:
+    """The file a flow question is about: a named path, a symbol's file, a file stem, or the
+    most connected-looking file of a named component (shortest path first)."""
+    for match in _FILE_TOKEN.finditer(question):
+        matches, _ = resolve_path(paths, match.group(1).strip("./"))
+        if matches:
+            return matches[0]
+    about_tests = bool(re.search(r"\btests?\b|\bspec\b", question, re.IGNORECASE))
+    lowered_components = {name.lower(): name for name in components}
+    stems: dict[str, list[str]] = {}
+    for path in paths:
+        stems.setdefault(PurePosixPath(path).stem.lower(), []).append(path)
+    for token in _NAME_TOKEN.findall(question):
+        word = token.lower().rstrip(".?()")
+        if word in _GENERIC:
+            continue
+        # A file named after the word beats a symbol of that name. Test files only count when
+        # the question is about tests; otherwise ordinary retrieval answers instead.
+        candidates = [
+            path for path in stems.get(word, []) if about_tests or not _is_test_path(path)
+        ]
+        if candidates:
+            return min(candidates, key=_source_first)
+        if word in symbols and (about_tests or not _is_test_path(symbols[word])):
+            return symbols[word]
+        if word in lowered_components:
+            return min(components[lowered_components[word]], key=_source_first)
+    for name, members in components.items():
+        if len(name) > 3 and name.lower() in question.lower() and members:
+            return min(members, key=_source_first)
+    return None
+
+
+def _flow_sentence(graph: genome.GenomeGraphBuilder, step: FlowStep) -> str:
+    note = " (inferred)" if step.inferred else ""
+    return f"{label(graph, step.source)} {verb(step)} {label(graph, step.target)}{note}."
+
+
+def _anchor(step: FlowStep, fallback: str | None) -> str | None:
+    return step.evidence_ids[0] if step.evidence_ids else fallback
+
+
+def _flow(
+    db: Session,
+    snapshot: RepositorySnapshot,
+    question: str,
+    pool: dict[str, RetrievalDocument],
+    repository_name: str,
+) -> GroundedResult | None:
+    facts = insights.load_facts(db, snapshot, repository_name, {}, "none")
+    if not facts.component_of:
+        return None
+    symbols: dict[str, str] = {}
+    for path in sorted(facts.symbols, key=_source_first):
+        for name in facts.symbols[path]:
+            if len(name) >= 4:
+                symbols.setdefault(name.lower(), path)
+    components: dict[str, list[str]] = {}
+    for path, name in facts.component_of.items():
+        components.setdefault(name, []).append(path)
+    target = flow_target(question, sorted(facts.component_of), symbols, components)
+    if target is None:
+        return None
+    graph = genome.build_full_genome(db, facts, include_symbols_for={target})
+    flow = trace_flow(graph, target)
+    if flow.empty:
+        return None
+    return _flow_result(graph, flow, target, snapshot, pool)
+
+
+def _flow_result(
+    graph: genome.GenomeGraphBuilder,
+    flow: CodeFlow,
+    target: str,
+    snapshot: RepositorySnapshot,
+    pool: dict[str, RetrievalDocument],
+) -> GroundedResult | None:
+    sha = snapshot.commit_sha[:12]
+    file_evidence = next(iter(graph.nodes[flow.start].evidence_ids), None)
+    texts: dict[str, list[str]] = {}
+
+    def cite(step: FlowStep) -> None:
+        anchor = _anchor(step, file_evidence)
+        if anchor is not None:
+            texts.setdefault(anchor, []).append(_flow_sentence(graph, step))
+
+    lines = [f"How {target} works, following the code graph of snapshot {sha}:"]
+    if flow.declared:
+        lines.append(f"It declares {', '.join(flow.declared)}.")
+        if file_evidence:
+            texts.setdefault(file_evidence, []).append(
+                f"{target} declares {', '.join(flow.declared)}."
+            )
+    if flow.callers:
+        lines.append(
+            "Called or imported by: "
+            + ", ".join(f"{label(graph, step.source)} ({verb(step)})" for step in flow.callers)
+            + "."
+        )
+        for step in flow.callers:
+            cite(step)
+    for step in flow.symbol_calls:
+        cite(step)
+    if flow.symbol_calls:
+        lines.append("Inside the file:")
+        lines.extend(f"- {_flow_sentence(graph, step)}" for step in flow.symbol_calls)
+    for number, chain in enumerate(flow.chains, start=1):
+        parts = [label(graph, chain[0].source)]
+        for step in chain:
+            marker = " (inferred)" if step.inferred else ""
+            parts.append(f"{verb(step)}{marker} → {label(graph, step.target)}")
+            cite(step)
+        lines.append(f"Flow {number}: " + " ".join(parts))
+    if not texts:
+        return None
+    for evidence_id, parts in texts.items():
+        pool[evidence_id] = RetrievalDocument(evidence_id, "flow", " ".join(dict.fromkeys(parts)))
+    return GroundedResult(
+        "\n".join(lines),
+        tuple(texts),
+        (
+            f"Flow traced by {FLOW_VERSION} over static calls and imports, up to three hops; "
+            "runtime dispatch, dependency injection, and dynamic imports are not followed.",
+            "CALLS edges are resolved statically without type checking, and data-store and API "
+            "use is detected from client libraries and literal URLs; those steps are inferred.",
+        ),
+    )
+
+
 def route_question(
     db: Session,
     snapshot: RepositorySnapshot,
@@ -455,7 +623,7 @@ def route_question(
     pool: dict[str, RetrievalDocument],
     repository_name: str = "",
 ) -> GroundedResult | None:
-    """A deterministic answer for overview, risk, and change-impact questions, or None."""
+    """A deterministic answer for overview, risk, flow, and change-impact questions, or None."""
     if _asks_why_risky(question):
         paths = list(
             db.scalars(
@@ -471,6 +639,10 @@ def route_question(
             if explained is not None:
                 return explained
     tokens = mentioned_files(question)
+    if is_flow_question(question):
+        traced = _flow(db, snapshot, question, pool, repository_name)
+        if traced is not None:
+            return traced
     if tokens:
         return _impact(db, snapshot, tokens, pool)
     if is_overview_question(question, repository_name):

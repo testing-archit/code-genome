@@ -1,14 +1,21 @@
+import hashlib
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Request, Response
+from sqlalchemy import select
 
 from ..audit import record_audit_event
 from ..auth import Actor, Database
+from ..config import get_settings
 from ..errors import AppError
-from ..models import utc_now
+from ..ids import new_id
+from ..models import GeneratedDocRewrite, RepositorySnapshot, utc_now
 from ..schemas import (
     ContributorResponse,
+    DocRewriteResponse,
     GeneratedDocumentResponse,
     GeneratedDocumentsResponse,
     HealthComponentResponse,
@@ -22,7 +29,8 @@ from ..schemas import (
     RepositoryOverviewResponse,
     UnstableComponentResponse,
 )
-from ..services import insights, ml
+from ..services import doc_rewrite, insights, ml
+from ..services.gemini import GeminiProviderError, rewrite_document_markdown
 from ..services.knowledge import classify
 from .intelligence import _repository, _snapshot, get_risk
 
@@ -169,6 +177,73 @@ def get_module_graph(repository_id: str, db: Database, actor: Actor) -> ModuleGr
     )
 
 
+def _gemini() -> tuple[str, str] | None:
+    settings = get_settings()
+    key = settings.gemini_api_key
+    if key is None or not key.get_secret_value():
+        return None
+    return key.get_secret_value(), settings.gemini_model
+
+
+def _stored_rewrites(
+    db: Database, snapshot: RepositorySnapshot, documents: dict[str, str]
+) -> dict[str, GeneratedDocRewrite]:
+    """The newest stored rewrite per document whose source text still matches."""
+    rows = db.scalars(
+        select(GeneratedDocRewrite)
+        .where(
+            GeneratedDocRewrite.snapshot_id == snapshot.id,
+            GeneratedDocRewrite.workspace_id == snapshot.workspace_id,
+            GeneratedDocRewrite.docs_version == insights.DOCS_VERSION,
+            GeneratedDocRewrite.rewrite_version == doc_rewrite.REWRITE_VERSION,
+        )
+        .order_by(GeneratedDocRewrite.created_at.desc())
+    )
+    current = {name: doc_rewrite.source_hash(markdown) for name, markdown in documents.items()}
+    latest: dict[str, GeneratedDocRewrite] = {}
+    for row in rows:
+        if current.get(row.name) == row.source_sha256 and row.name not in latest:
+            latest[row.name] = row
+    return latest
+
+
+def _documents_response(
+    repository_id: str,
+    snapshot: RepositorySnapshot,
+    generated_at: datetime,
+    documents: dict[str, str],
+    rewrites: dict[str, GeneratedDocRewrite],
+) -> GeneratedDocumentsResponse:
+    items: list[GeneratedDocumentResponse] = []
+    for name, markdown in documents.items():
+        row = rewrites.get(name)
+        items.append(
+            GeneratedDocumentResponse(
+                name=name,
+                description=insights.DOCUMENTS[name],
+                markdown=markdown,
+                rewritten_markdown=row.markdown if row and row.status == "accepted" else None,
+                rewrite=DocRewriteResponse(
+                    model=row.model,
+                    rewrite_version=row.rewrite_version,
+                    status=row.status,
+                    reason=row.reason,
+                    created_at=row.created_at,
+                )
+                if row
+                else None,
+            )
+        )
+    return GeneratedDocumentsResponse(
+        repository_id=repository_id,
+        snapshot_sha=snapshot.commit_sha,
+        version=insights.DOCS_VERSION,
+        generated_at=generated_at,
+        documents=items,
+        rewrite_available=_gemini() is not None,
+    )
+
+
 @router.get("/repositories/{repository_id}/docs", response_model=GeneratedDocumentsResponse)
 def get_generated_docs(
     repository_id: str, db: Database, actor: Actor
@@ -176,18 +251,95 @@ def get_generated_docs(
     facts = _facts(db, repository_id, actor)
     generated_at = utc_now()
     documents = insights.generate_documents(facts, generated_at)
-    return GeneratedDocumentsResponse(
-        repository_id=repository_id,
-        snapshot_sha=facts.snapshot.commit_sha,
-        version=insights.DOCS_VERSION,
-        generated_at=generated_at,
-        documents=[
-            GeneratedDocumentResponse(
-                name=name, description=insights.DOCUMENTS[name], markdown=markdown
+    rewrites = _stored_rewrites(db, facts.snapshot, documents)
+    return _documents_response(repository_id, facts.snapshot, generated_at, documents, rewrites)
+
+
+def _rewrite_one(api_key: str, model: str, markdown: str) -> tuple[str, str | None, str | None]:
+    """(status, reason, rewritten markdown or None); never raises."""
+    header, body = doc_rewrite.split_header(markdown)
+    if len(body) > doc_rewrite.MAX_SOURCE_CHARS:
+        return "skipped", "The document is too long to rewrite in one request.", None
+    try:
+        rewritten = rewrite_document_markdown(
+            api_key=api_key, model=model, markdown=body, timeout_seconds=60
+        )
+    except GeminiProviderError as error:
+        return "rejected", f"Gemini did not return a usable rewrite ({error}).", None
+    check = doc_rewrite.check_rewrite(body, rewritten)
+    if not check.accepted:
+        return "rejected", check.reason, None
+    return "accepted", None, f"{header}\n\n{rewritten}\n" if header else rewritten
+
+
+@router.post(
+    "/repositories/{repository_id}/docs/rewrite", response_model=GeneratedDocumentsResponse
+)
+def rewrite_generated_docs(
+    repository_id: str, request: Request, db: Database, actor: Actor
+) -> GeneratedDocumentsResponse:
+    """Ask Gemini for readable versions; each is kept only if it preserves every citation."""
+    gemini = _gemini()
+    if gemini is None:
+        raise AppError(
+            409,
+            "GEMINI_NOT_CONFIGURED",
+            "Gemini is not configured",
+            "Set GEMINI_API_KEY on the API to write readable versions of the generated docs.",
+        )
+    api_key, model = gemini
+    facts = _facts(db, repository_id, actor)
+    snapshot = facts.snapshot
+    generated_at = utc_now()
+    documents = insights.generate_documents(facts, generated_at)
+    existing = _stored_rewrites(db, snapshot, documents)
+    pending = {
+        name: markdown
+        for name, markdown in documents.items()
+        if name not in existing or existing[name].model != model
+    }
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outcomes = dict(
+            zip(
+                pending,
+                pool.map(lambda markdown: _rewrite_one(api_key, model, markdown), pending.values()),
+                strict=True,
             )
-            for name, markdown in documents.items()
-        ],
+        )
+    for name, (status, reason, markdown) in outcomes.items():
+        row = GeneratedDocRewrite(
+            id=new_id("drw"),
+            workspace_id=actor.workspace_id,
+            repository_id=repository_id,
+            snapshot_id=snapshot.id,
+            snapshot_sha=snapshot.commit_sha,
+            name=name,
+            docs_version=insights.DOCS_VERSION,
+            model=model,
+            rewrite_version=doc_rewrite.REWRITE_VERSION,
+            source_sha256=doc_rewrite.source_hash(documents[name]),
+            status=status,
+            reason=reason,
+            markdown=markdown,
+            created_by=actor.user_id,
+            created_at=utc_now(),
+        )
+        db.add(row)
+        existing[name] = row
+    record_audit_event(
+        db,
+        workspace_id=actor.workspace_id,
+        actor_id=actor.user_id,
+        action="repository.docs.rewritten",
+        resource_type="repository",
+        resource_id=repository_id,
+        after_hash=hashlib.sha256(
+            ",".join(f"{name}:{outcome[0]}" for name, outcome in sorted(outcomes.items())).encode()
+        ).hexdigest(),
+        request_id=request.state.request_id,
     )
+    db.commit()
+    return _documents_response(repository_id, snapshot, generated_at, documents, existing)
 
 
 @router.get("/repositories/{repository_id}/docs/{name}/download")

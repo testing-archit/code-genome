@@ -186,19 +186,24 @@ def _evidence_candidates(
     db: Database, report: DeliveryReport
 ) -> tuple[tuple[EvidenceCandidate, ...], list[FileChange]]:
     scope = DeliveryScope.model_validate(report.scope_json)
-    changes = list(
-        db.scalars(
-            select(FileChange)
-            .where(
-                FileChange.repository_id == report.repository_id,
-                FileChange.workspace_id == report.workspace_id,
-                FileChange.authored_at >= scope.from_,
-                FileChange.authored_at <= scope.to,
-            )
-            .order_by(FileChange.authored_at.desc())
-            .limit(5000)
+    # Each analysed snapshot stores its own FileChange rows, so overlapping history repeats
+    # a (commit, path) pair; keep one so changes are neither cited nor counted twice.
+    seen: set[tuple[str, str]] = set()
+    changes: list[FileChange] = []
+    for change in db.scalars(
+        select(FileChange)
+        .where(
+            FileChange.repository_id == report.repository_id,
+            FileChange.workspace_id == report.workspace_id,
+            FileChange.authored_at >= scope.from_,
+            FileChange.authored_at <= scope.to,
         )
-    )
+        .order_by(FileChange.authored_at.desc(), FileChange.commit_sha, FileChange.path)
+        .limit(5000)
+    ):
+        if (change.commit_sha, change.path) not in seen:
+            seen.add((change.commit_sha, change.path))
+            changes.append(change)
     shas = {change.commit_sha for change in changes}
     messages = {
         item.sha: item.message
@@ -239,7 +244,7 @@ def assess_delivery_report(
             select(DeliveryAssessment).where(DeliveryAssessment.claim_id == claim.id)
         )
         if existing is not None:
-            cited_paths.update(evidence.rsplit(":", 1)[-1] for evidence in existing.evidence_ids)
+            cited_paths.update(evidence.split(":", 2)[-1] for evidence in existing.evidence_ids)
             continue
         draft = parse_claims(claim.original_text, max_claims=1)[0]
         draft = type(draft)(
@@ -250,7 +255,7 @@ def assess_delivery_report(
             claim.claim_type,
         )
         result = assess_claim(draft, candidates)
-        cited_paths.update(evidence.rsplit(":", 1)[-1] for evidence in result.evidence_ids)
+        cited_paths.update(evidence.split(":", 2)[-1] for evidence in result.evidence_ids)
         db.add(
             DeliveryAssessment(
                 id=new_id("asm"),

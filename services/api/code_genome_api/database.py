@@ -10,8 +10,14 @@ class Base(DeclarativeBase):
     pass
 
 
-def _connect_args(url: str) -> dict[str, bool]:
-    return {"check_same_thread": False} if url.startswith("sqlite") else {}
+def _connect_args(url: str) -> dict[str, bool | str]:
+    if url.startswith("sqlite"):
+        return {"check_same_thread": False}
+    if url.startswith("postgresql"):
+        # Timestamps are UTC by contract; pin the session zone so naive values and server-side
+        # defaults are never read in the database server's local zone.
+        return {"options": "-c timezone=UTC"}
+    return {}
 
 
 settings = get_settings()

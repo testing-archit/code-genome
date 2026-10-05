@@ -103,6 +103,7 @@ def check_change_impact(
                     modules=modules_by_path.get(neighbour.path, []),
                     signals=neighbour.signals,
                     weighted_score=neighbour.weighted_score,
+                    graph_metrics=neighbour.graph_metrics,
                 )
                 continue
             # Keep the "why" from whichever changed file links to it most strongly.

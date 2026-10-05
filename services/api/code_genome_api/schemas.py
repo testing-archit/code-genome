@@ -350,6 +350,14 @@ class ImpactSignalsResponse(BaseModel):
     bug_correlation: float = Field(ge=0, le=1)
 
 
+class ImpactGraphMetricsResponse(BaseModel):
+    """Import-graph position of the impacted file; context only, not part of the score."""
+
+    pagerank: float = Field(ge=0)
+    pagerank_percentile: float = Field(ge=0, le=1)
+    betweenness: float = Field(ge=0, le=1)
+
+
 class ImpactItemResponse(BaseModel):
     path: str
     score: float
@@ -358,6 +366,7 @@ class ImpactItemResponse(BaseModel):
     # Explainable weighted score (impact-weighted@1); absent when not computed.
     signals: ImpactSignalsResponse | None = None
     weighted_score: float | None = None
+    graph_metrics: ImpactGraphMetricsResponse | None = None
 
 
 class ImpactResponse(BaseModel):
@@ -547,6 +556,7 @@ class ChangeImpactItemResponse(BaseModel):
     modules: list[str]
     signals: ImpactSignalsResponse | None = None
     weighted_score: float | None = None
+    graph_metrics: ImpactGraphMetricsResponse | None = None
 
 
 class ChangeModuleResponse(BaseModel):
@@ -820,10 +830,24 @@ class ModuleGraphResponse(BaseModel):
     limitations: list[str]
 
 
+class DocRewriteResponse(BaseModel):
+    """A model-written version's provenance; ``accepted`` only when citations were preserved."""
+
+    model: str
+    rewrite_version: str
+    status: Literal["accepted", "rejected", "skipped"]
+    reason: str | None = None
+    created_at: datetime
+
+
 class GeneratedDocumentResponse(BaseModel):
     name: str
     description: str
     markdown: str
+    # Readable model-written version of ``markdown``; null unless an accepted rewrite exists
+    # for exactly this deterministic text.
+    rewritten_markdown: str | None = None
+    rewrite: DocRewriteResponse | None = None
 
 
 class GeneratedDocumentsResponse(BaseModel):
@@ -832,6 +856,7 @@ class GeneratedDocumentsResponse(BaseModel):
     version: str
     generated_at: datetime
     documents: list[GeneratedDocumentResponse]
+    rewrite_available: bool = False
 
 
 # ---------------------------------------------------------------- genome graph, bugs, timeline

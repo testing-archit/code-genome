@@ -37,6 +37,15 @@ dev = [
   "ruff>=0.12,<1",
 ]
 
+# Optional model backends. Without them the app uses the lightweight models (logistic
+# regression for instability, LSA for semantic similarity) and says so in its results.
+deep = [
+  "torch>=2.4,<3",
+]
+embeddings = [
+  "sentence-transformers>=3,<6",
+]
+
 [tool.setuptools.packages.find]
 where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git", "packages/intelligence", "packages/ml"]
 include = ["code_genome_*"]

@@ -1,5 +1,6 @@
 import base64
 import binascii
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Query
@@ -177,8 +178,15 @@ def get_graph(
     )
 
 
+_EVIDENCE_ID = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
 @router.get("/evidence/{evidence_id}", response_model=EvidenceResponse)
 def get_evidence(evidence_id: str, db: Database, actor: Actor) -> EvidenceResponse:
+    # Stored IDs are short tokens; anything else (NUL bytes, paths) cannot match and Postgres
+    # rejects NUL in text parameters, so answer "not found" before querying.
+    if not _EVIDENCE_ID.fullmatch(evidence_id):
+        raise AppError(404, "NOT_FOUND", "Resource not found", "Evidence was not found.")
     item = db.scalar(
         select(Provenance)
         .join(RepositorySnapshot, RepositorySnapshot.id == Provenance.snapshot_id)

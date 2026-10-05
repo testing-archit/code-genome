@@ -723,7 +723,11 @@ def component_history(facts: SnapshotFacts) -> dict[str, dict[str, Any]]:
                 for email, count in authors.most_common(5)
             ],
             "commits": len(shas),
-            "bug_fixes": sum(1 for commit in known if is_fix_message(commit.message)),
+            "bug_fixes": sum(
+                1
+                for commit in known
+                if is_fix_message(commit.message) and len(commit.parent_shas or []) <= 1
+            ),
             "last_changed": max((_as_utc(commit.authored_at) for commit in known), default=None),
         }
     return history

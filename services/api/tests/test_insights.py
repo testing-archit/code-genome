@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 from code_genome_api.models import AuditEvent
-from code_genome_api.services.insights import components
+from code_genome_api.services.insights import SnapshotFacts, component_history, components
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,6 +26,40 @@ def test_components_pick_a_readable_directory_depth() -> None:
     assert {"app/src/pages", "app/src/components", "api/src/routes", "api/src/db"} <= groups
     assert "(root)" in groups
     assert components([]) == {}
+
+
+def test_component_history_does_not_count_merge_commits_as_fixes() -> None:
+    """Bug-fix counts follow the documented rule: keyword subject, merge commits excluded."""
+    when = datetime(2026, 9, 1, tzinfo=UTC)
+
+    def commit(sha: str, message: str, parents: int) -> Any:
+        return SimpleNamespace(
+            sha=sha,
+            message=message,
+            parent_shas=[f"{index}" * 40 for index in range(parents)],
+            author_email="dev@example.com",
+            author_name="Dev",
+            authored_at=when,
+        )
+
+    commits = [
+        commit("a" * 40, "fix: stop double charging", 1),
+        commit("b" * 40, "Merge pull request #7 from acme/fix-login", 2),
+        commit("c" * 40, "add invoice export", 1),
+    ]
+    facts = cast(
+        SnapshotFacts,
+        SimpleNamespace(
+            commits=commits,
+            file_changes=[
+                SimpleNamespace(commit_sha=item.sha, path="src/billing/pay.ts") for item in commits
+            ],
+            component_of={"src/billing/pay.ts": "src/billing"},
+        ),
+    )
+    history = component_history(facts)["src/billing"]
+    assert history["commits"] == 3
+    assert history["bug_fixes"] == 1
 
 
 def test_overview_reports_health_counts_and_summary(

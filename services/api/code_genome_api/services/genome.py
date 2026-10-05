@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import GraphEdge, GraphNode, RepositoryCommit
+from . import embeddings
 from .insights import (
     SnapshotFacts,
     architecture_facts,
@@ -41,6 +42,8 @@ NO_EVIDENCE = "No supporting evidence was identified in the selected scope."
 SEMANTIC_THRESHOLD = 0.6
 SEMANTIC_TOP_K = 3
 MAX_SEMANTIC_FILES = 3_000
+# Sentence embeddings of identifier text score related files higher than LSA does.
+TRANSFORMER_THRESHOLD = 0.7
 RECENT_COMMITS = 25
 MAX_COMMITS = 80
 MAX_DEVELOPERS = 25
@@ -90,6 +93,7 @@ class GenomeGraphBuilder:
     def __init__(self) -> None:
         self.nodes: dict[str, Node] = {}
         self.edges: dict[str, Edge] = {}
+        self.semantic_backend = LSA_BACKEND
 
     def node(self, node: Node) -> None:
         self.nodes.setdefault(node.id, node)
@@ -129,6 +133,26 @@ def _tokens(text: str) -> list[str]:
     return [token.lower() for token in _SPLIT.findall(text) if len(token) > 1]
 
 
+LSA_BACKEND = "lsa"
+
+
+def _top_pairs(
+    paths: list[str], unit: np.ndarray, threshold: float, top_k: int
+) -> list[tuple[str, str, float]]:
+    similarity = unit @ unit.T
+    np.fill_diagonal(similarity, -1.0)
+    pairs: dict[tuple[str, str], float] = {}
+    for index, path in enumerate(paths):
+        row = similarity[index]
+        for other in np.argsort(-row)[:top_k]:
+            score = float(row[other])
+            if score < threshold:
+                break
+            left, right = sorted((path, paths[int(other)]))
+            pairs[(left, right)] = max(pairs.get((left, right), 0.0), round(score, 4))
+    return sorted(((left, right, score) for (left, right), score in pairs.items()))
+
+
 def semantic_pairs(
     documents: dict[str, str],
     *,
@@ -152,19 +176,21 @@ def semantic_pairs(
     reduced = TruncatedSVD(n_components=components, random_state=0).fit_transform(matrix)
     norms = np.linalg.norm(reduced, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    unit = reduced / norms
-    similarity = unit @ unit.T
-    np.fill_diagonal(similarity, -1.0)
-    pairs: dict[tuple[str, str], float] = {}
-    for index, path in enumerate(paths):
-        row = similarity[index]
-        for other in np.argsort(-row)[:top_k]:
-            score = float(row[other])
-            if score < threshold:
-                break
-            left, right = sorted((path, paths[int(other)]))
-            pairs[(left, right)] = max(pairs.get((left, right), 0.0), round(score, 4))
-    return sorted(((left, right, score) for (left, right), score in pairs.items()))
+    return _top_pairs(paths, reduced / norms, threshold, top_k)
+
+
+def semantic_pairs_with_backend(
+    documents: dict[str, str], cache_key: tuple[str, str, str]
+) -> tuple[list[tuple[str, str, float]], str]:
+    """Transformer embeddings when available (see ``embeddings``), else LSA; returns the pairs
+    and the backend that produced them."""
+    paths = sorted(documents)[:MAX_SEMANTIC_FILES]
+    if len(paths) >= 4 and embeddings.transformer_requested():
+        vectors = embeddings.unit_vectors(cache_key, paths, [documents[path] for path in paths])
+        if vectors is not None:
+            pairs = _top_pairs(paths, vectors, TRANSFORMER_THRESHOLD, SEMANTIC_TOP_K)
+            return pairs, f"{embeddings.TRANSFORMER_BACKEND}:{embeddings.model_name()}"
+    return semantic_pairs(documents), LSA_BACKEND
 
 
 def _semantic_documents(facts: SnapshotFacts, paths: Iterable[str]) -> dict[str, str]:
@@ -415,7 +441,11 @@ def build_full_genome(
         )
 
     # Semantic similarity (inferred).
-    for left, right, score in semantic_pairs(_semantic_documents(facts, facts.component_of)):
+    semantic, graph.semantic_backend = semantic_pairs_with_backend(
+        _semantic_documents(facts, facts.component_of),
+        (snapshot.workspace_id, snapshot.id, snapshot.analysis_version),
+    )
+    for left, right, score in semantic:
         graph.edge(
             "SEMANTICALLY_RELATED_TO",
             f"file:{left}",

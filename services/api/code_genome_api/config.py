@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     gemini_live_session_minutes: int = 15
     gemini_timeout_seconds: float = 20
     gemini_max_output_tokens: int = 1200
+    # Semantic similarity backend for SEMANTICALLY_RELATED_TO edges: "auto" uses a local
+    # sentence-transformer when the optional "embeddings" extra and weights are present, else LSA.
+    semantic_backend: Literal["auto", "lsa", "transformer"] = "auto"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def validate_runtime(self) -> None:
         if self.environment == "production" and self.auth_mode != "oidc":

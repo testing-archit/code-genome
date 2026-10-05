@@ -7,6 +7,7 @@ from typing import Any
 
 from code_genome_ml import (
     TASKS,
+    BugLinkRecord,
     ChangeRecord,
     CommitRecord,
     FileRecord,
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..ids import new_id
 from ..models import (
+    BugLink,
     FileChange,
     FileHotspot,
     FileManifestEntry,
@@ -139,7 +141,16 @@ def training_inputs(db: Session, snapshot: RepositorySnapshot) -> TrainingInputs
         target = nodes.get(edge.to_node)
         if source and target and source.kind == "FILE" and target.kind == "FILE":
             imports.append(ImportRecord(source.natural_key, target.natural_key))
-    return TrainingInputs(commits, changes, files, imports)
+    bug_links = [
+        BugLinkRecord(row.path, row.introducing_sha, row.fix_sha, row.confidence)
+        for row in db.scalars(
+            select(BugLink).where(
+                BugLink.snapshot_id == snapshot.id,
+                BugLink.workspace_id == snapshot.workspace_id,
+            )
+        )
+    ]
+    return TrainingInputs(commits, changes, files, imports, bug_links)
 
 
 def _trim(task: str, result: dict[str, Any]) -> dict[str, Any]:

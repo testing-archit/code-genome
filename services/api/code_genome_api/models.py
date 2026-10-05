@@ -23,7 +23,8 @@ class Membership(Base):
     __tablename__ = "memberships"
 
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        primary_key=True,
     )
     user_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     role: Mapped[str] = mapped_column(String(24), default="owner")
@@ -38,7 +39,8 @@ class Repository(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     provider: Mapped[str] = mapped_column(String(32), default="github")
     external_id: Mapped[str] = mapped_column(String(255))
@@ -59,10 +61,12 @@ class RepositoryConnection(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     provider: Mapped[str] = mapped_column(String(32), default="github")
     token_kind: Mapped[str] = mapped_column(String(48))
@@ -81,10 +85,12 @@ class BranchRef(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(255))
     head_sha: Mapped[str] = mapped_column(String(64), index=True)
@@ -97,10 +103,12 @@ class RepositoryCommit(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     sha: Mapped[str] = mapped_column(String(64), index=True)
     parent_shas: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -116,10 +124,12 @@ class AnalysisRun(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     requested_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -148,14 +158,18 @@ class RepositorySnapshot(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     commit_sha: Mapped[str] = mapped_column(String(64), index=True)
     tree_sha: Mapped[str] = mapped_column(String(64))
-    run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"))
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT", deferrable=True, initially="DEFERRED")
+    )
     analysis_version: Mapped[str] = mapped_column(String(160))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -166,13 +180,18 @@ class FileManifestEntry(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     path: Mapped[str] = mapped_column(String(1000))
     blob_sha: Mapped[str] = mapped_column(String(64), index=True)
@@ -189,13 +208,18 @@ class FileChange(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     commit_sha: Mapped[str] = mapped_column(String(64), index=True)
     path: Mapped[str] = mapped_column(String(1000), index=True)
@@ -211,13 +235,18 @@ class CoChangeEdge(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     left_path: Mapped[str] = mapped_column(String(1000))
     right_path: Mapped[str] = mapped_column(String(1000))
@@ -233,13 +262,18 @@ class FileHotspot(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     path: Mapped[str] = mapped_column(String(1000))
     commit_count: Mapped[int] = mapped_column(Integer)
@@ -254,13 +288,18 @@ class ModuleCandidate(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     natural_key: Mapped[str] = mapped_column(String(1000))
     file_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -276,10 +315,12 @@ class DeliveryReport(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     raw_text: Mapped[str] = mapped_column(Text)
     scope_json: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -294,10 +335,14 @@ class DeliveryClaim(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     report_id: Mapped[str] = mapped_column(
-        ForeignKey("delivery_reports.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "delivery_reports.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     ordinal: Mapped[int] = mapped_column(Integer)
     original_text: Mapped[str] = mapped_column(Text)
@@ -311,10 +356,13 @@ class DeliveryAssessment(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     claim_id: Mapped[str] = mapped_column(
-        ForeignKey("delivery_claims.id", ondelete="CASCADE"), unique=True, index=True
+        ForeignKey("delivery_claims.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        unique=True,
+        index=True,
     )
     status: Mapped[str] = mapped_column(String(48), index=True)
     confidence: Mapped[float] = mapped_column(Float)
@@ -331,10 +379,14 @@ class UnreportedChange(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     report_id: Mapped[str] = mapped_column(
-        ForeignKey("delivery_reports.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "delivery_reports.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     path: Mapped[str] = mapped_column(String(1000))
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -348,13 +400,18 @@ class RiskScore(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     path: Mapped[str] = mapped_column(String(1000))
     score: Mapped[float] = mapped_column(Float, index=True)
@@ -370,10 +427,12 @@ class GroundedAnswer(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
@@ -391,10 +450,14 @@ class AnswerFeedback(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     answer_id: Mapped[str] = mapped_column(
-        ForeignKey("grounded_answers.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "grounded_answers.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     user_id: Mapped[str] = mapped_column(String(120))
     rating: Mapped[int] = mapped_column(Integer)
@@ -407,13 +470,18 @@ class Provenance(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     kind: Mapped[str] = mapped_column(String(40))
     repository_sha: Mapped[str] = mapped_column(String(64), index=True)
@@ -434,10 +502,14 @@ class GraphNode(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     kind: Mapped[str] = mapped_column(String(40), index=True)
     natural_key: Mapped[str] = mapped_column(String(1000))
@@ -450,16 +522,26 @@ class GraphEdge(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     type: Mapped[str] = mapped_column(String(40), index=True)
-    from_node: Mapped[str] = mapped_column(ForeignKey("graph_nodes.id", ondelete="CASCADE"))
-    to_node: Mapped[str] = mapped_column(ForeignKey("graph_nodes.id", ondelete="CASCADE"))
+    from_node: Mapped[str] = mapped_column(
+        ForeignKey("graph_nodes.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED")
+    )
+    to_node: Mapped[str] = mapped_column(
+        ForeignKey("graph_nodes.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED")
+    )
     confidence: Mapped[float] = mapped_column(Float)
-    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="RESTRICT"))
+    provenance_id: Mapped[str] = mapped_column(
+        ForeignKey("provenance.id", ondelete="RESTRICT", deferrable=True, initially="DEFERRED")
+    )
 
 
 class ParseDiagnostic(Base):
@@ -467,10 +549,14 @@ class ParseDiagnostic(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     code: Mapped[str] = mapped_column(String(80), index=True)
     message: Mapped[str] = mapped_column(String(500))
@@ -480,7 +566,8 @@ class ParseDiagnostic(Base):
     end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_column: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provenance_id: Mapped[str | None] = mapped_column(
-        ForeignKey("provenance.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("provenance.id", ondelete="SET NULL", deferrable=True, initially="DEFERRED"),
+        nullable=True,
     )
 
 
@@ -492,7 +579,8 @@ class IdempotencyRecord(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     endpoint: Mapped[str] = mapped_column(String(160))
     key: Mapped[str] = mapped_column(String(160))
@@ -507,7 +595,8 @@ class AuditEvent(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     actor_id: Mapped[str] = mapped_column(String(120), index=True)
     action: Mapped[str] = mapped_column(String(120), index=True)
@@ -524,10 +613,12 @@ class ChatConversation(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     title: Mapped[str] = mapped_column(String(160))
     created_by: Mapped[str] = mapped_column(String(120), index=True)
@@ -540,16 +631,23 @@ class ChatMessage(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     conversation_id: Mapped[str] = mapped_column(
-        ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "chat_conversations.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     role: Mapped[str] = mapped_column(String(16))
     channel: Mapped[str] = mapped_column(String(16), default="text")
     content: Mapped[str] = mapped_column(Text)
     answer_id: Mapped[str | None] = mapped_column(
-        ForeignKey("grounded_answers.id", ondelete="SET NULL"), nullable=True
+        ForeignKey(
+            "grounded_answers.id", ondelete="SET NULL", deferrable=True, initially="DEFERRED"
+        ),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -562,13 +660,18 @@ class MlModelRun(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
     snapshot_sha: Mapped[str] = mapped_column(String(64))
     task: Mapped[str] = mapped_column(String(40))
@@ -577,6 +680,47 @@ class MlModelRun(Base):
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     trained_by: Mapped[str] = mapped_column(String(120))
     trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class GeneratedDocRewrite(Base):
+    """A model-written version of one generated document, kept beside its deterministic source.
+
+    ``status`` is "accepted" only when the rewrite kept every citation of the source and cited
+    nothing else; otherwise the deterministic text is served and ``reason`` says why."""
+
+    __tablename__ = "generated_doc_rewrites"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id", "name", "docs_version", "model", "source_sha256", name="uq_doc_rewrite"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
+    )
+    snapshot_sha: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(80))
+    docs_version: Mapped[str] = mapped_column(String(80))
+    model: Mapped[str] = mapped_column(String(100))
+    rewrite_version: Mapped[str] = mapped_column(String(80))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class WebhookDelivery(Base):
@@ -609,15 +753,22 @@ class KnowledgeChunkRecord(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
-    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="CASCADE"))
+    provenance_id: Mapped[str] = mapped_column(
+        ForeignKey("provenance.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED")
+    )
     path: Mapped[str] = mapped_column(String(1000))
     blob_sha: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16), index=True)
@@ -645,15 +796,22 @@ class BugLink(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+        ForeignKey("workspaces.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     repository_id: Mapped[str] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+        ForeignKey("repositories.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"),
+        index=True,
     )
     snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey(
+            "repository_snapshots.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED"
+        ),
+        index=True,
     )
-    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="CASCADE"))
+    provenance_id: Mapped[str] = mapped_column(
+        ForeignKey("provenance.id", ondelete="CASCADE", deferrable=True, initially="DEFERRED")
+    )
     fix_sha: Mapped[str] = mapped_column(String(64), index=True)
     introducing_sha: Mapped[str] = mapped_column(String(64), index=True)
     path: Mapped[str] = mapped_column(String(1000), index=True)

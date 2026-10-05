@@ -5,6 +5,7 @@ every prediction carries the evidence it was computed from.
 """
 
 from .components import group_components
+from .defect import import_centrality
 from .impact import ImpactPrediction, predict_impact
 from .impact_ranking import WEIGHTED_VERSION as IMPACT_WEIGHTED_VERSION
 from .impact_ranking import (
@@ -16,12 +17,21 @@ from .impact_ranking import (
 )
 from .instability import MODEL_VERSION as INSTABILITY_VERSION
 from .pipeline import TASKS, TrainingInputs, file_document, train_all
-from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, SearchDocument
+from .records import (
+    BugLinkRecord,
+    ChangeRecord,
+    CommitRecord,
+    FileRecord,
+    ImportRecord,
+    SearchDocument,
+)
 from .retrieval import MODEL_VERSION as RETRIEVAL_VERSION
 from .retrieval import HybridRetriever, SearchHit
 from .text import tokenize
 
 __all__ = [
+    "BugLinkRecord",
+    "import_centrality",
     "IMPACT_WEIGHTED_VERSION",
     "ImpactSignalContext",
     "WeightedImpact",
