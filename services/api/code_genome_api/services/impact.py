@@ -1,14 +1,25 @@
-"""One-hop change impact from observed imports, repeated co-change, and a learned model."""
+"""One-hop change impact from observed imports, repeated co-change, and a learned model.
+
+Every returned item also carries the explainable weighted score (``impact-weighted@1``):
+0.35 dependency strength + 0.30 co-change confidence + 0.20 import proximity + 0.15 shared
+bug-fix history, with each component in [0, 1] so the UI can show why a file is listed."""
 
 from collections.abc import Sequence
 
 from code_genome_intelligence import ImpactRelation, rank_impact
-from code_genome_ml import predict_impact
+from code_genome_ml import (
+    IMPACT_WEIGHTED_VERSION,
+    ImpactSignalContext,
+    keyword_fix_shas,
+    predict_impact,
+    weighted_impact_score,
+)
+from code_genome_ml.records import bulk_commit_shas
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import CoChangeEdge, GraphEdge, GraphNode, RepositorySnapshot
-from ..schemas import ImpactItemResponse
+from ..schemas import ImpactItemResponse, ImpactSignalsResponse
 from . import ml
 
 
@@ -56,7 +67,29 @@ def impact_for_paths(
         "Absence from this result does not establish absence of runtime impact.",
     ]
     link_model = ml.trained_result(db, snapshot, "change_impact")
-    inputs = ml.training_inputs(db, snapshot) if link_model is not None else None
+    inputs = ml.training_inputs(db, snapshot)
+    intent = ml.trained_result(db, snapshot, "commit_intent")
+    if intent is not None:
+        fix_shas = {
+            str(item.get("sha"))
+            for item in intent.get("predictions", [])
+            if isinstance(item, dict) and item.get("intent") == "fix"
+        }
+        fix_source = "commits the intent model classified as fixes"
+    else:
+        fix_shas = keyword_fix_shas(inputs.commits)
+        fix_source = "commits whose message mentions a fix (keyword rule; intent model untrained)"
+    bulk = bulk_commit_shas(inputs.changes, len(inputs.files))
+    signal_context = ImpactSignalContext(
+        [change for change in inputs.changes if change.commit_sha not in bulk],
+        inputs.imports,
+        fix_shas,
+    )
+    limitations.append(
+        f"Weighted score ({IMPACT_WEIGHTED_VERSION}) = 0.35 dependency strength + 0.30 "
+        "co-change confidence + 0.20 import proximity + 0.15 shared bug-fix history; bug "
+        f"fixes are {fix_source}. The weights are fixed by the spec, not learned."
+    )
     if link_model is not None:
         limitations.append(
             f"Model-predicted items come from {link_model['model_version']}, trained on this "
@@ -89,7 +122,7 @@ def impact_for_paths(
             )
             for item in rank_impact(path, tuple(relations))
         }
-        if link_model is not None and inputs is not None:
+        if link_model is not None:
             predictions = predict_impact(
                 link_model,
                 path,
@@ -112,5 +145,9 @@ def impact_for_paths(
                         reasons=[reason],
                         evidence_ids=[],
                     )
+        for item in impacted.values():
+            signals = signal_context.signals(path, item.path)
+            item.signals = ImpactSignalsResponse(**signals)
+            item.weighted_score = weighted_impact_score(signals)
         results[path] = sorted(impacted.values(), key=lambda item: (-item.score, item.path))
     return results, limitations

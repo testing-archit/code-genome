@@ -330,11 +330,23 @@ class RiskResponse(BaseModel):
     limitations: list[str]
 
 
+class ImpactSignalsResponse(BaseModel):
+    """Components of the weighted impact score, each normalised to [0, 1]."""
+
+    dependency: float = Field(ge=0, le=1)
+    co_change: float = Field(ge=0, le=1)
+    proximity: float = Field(ge=0, le=1)
+    bug_correlation: float = Field(ge=0, le=1)
+
+
 class ImpactItemResponse(BaseModel):
     path: str
     score: float
     reasons: list[str]
     evidence_ids: list[str]
+    # Explainable weighted score (impact-weighted@1); absent when not computed.
+    signals: ImpactSignalsResponse | None = None
+    weighted_score: float | None = None
 
 
 class ImpactResponse(BaseModel):

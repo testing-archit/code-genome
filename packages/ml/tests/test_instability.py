@@ -132,7 +132,7 @@ def test_defect_model_compares_random_forest_and_explains_the_champion() -> None
     result = train_defect_model(
         inputs.commits, inputs.changes, fix_shas, inputs.files, inputs.imports
     )
-    assert result.model_version == "defect-temporal@2"
+    assert result.model_version == "defect-temporal@3"
     assert {"logistic_regression", "random_forest", "gradient_boosting"} <= set(result.metrics)
     forest = result.metrics["random_forest"]
     assert isinstance(forest, dict) and forest["roc_auc"] > 0.5

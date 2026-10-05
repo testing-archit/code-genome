@@ -1,6 +1,7 @@
 """Bridges repository evidence in the database to the ML models in ``code_genome_ml``."""
 
 import logging
+import math
 from collections import defaultdict
 from typing import Any
 
@@ -36,6 +37,25 @@ from .knowledge import document_text
 
 logger = logging.getLogger(__name__)
 MAX_STORED_PREDICTIONS = 500
+
+
+def _metric(node: GraphNode | None, key: str) -> float | None:
+    """A non-negative, finite code metric from a FILE node's properties, else ``None``.
+
+    Analyzer output is untrusted input: booleans, strings, NaN and negatives are rejected."""
+    if node is None or not isinstance(node.properties_json, dict):
+        return None
+    value = node.properties_json.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def _count(node: GraphNode | None, key: str) -> int | None:
+    value = _metric(node, key)
+    return int(value) if value is not None else None
 
 
 def training_inputs(db: Session, snapshot: RepositorySnapshot) -> TrainingInputs:
@@ -101,6 +121,9 @@ def training_inputs(db: Session, snapshot: RepositorySnapshot) -> TrainingInputs
                 if path in file_nodes and file_nodes[path].evidence_ids
                 else None
             ),
+            loc=_count(file_nodes.get(path), "loc"),
+            complexity=_metric(file_nodes.get(path), "complexity"),
+            functions=_count(file_nodes.get(path), "functions"),
         )
         for path in paths
     ]

@@ -1,6 +1,13 @@
 "use client";
 
-import type { DefectChampion, MlOverviewWithInstability } from "@code-genome/contracts";
+import type {
+  AblationVariant,
+  ClusterAlgorithm,
+  ClusterScores,
+  DefectChampion,
+  MlOverviewV3,
+  RankingApproach,
+} from "@code-genome/contracts";
 import Link from "next/link";
 
 import {
@@ -36,7 +43,7 @@ function ModelsView() {
   if (models.error) return <Notice tone="error" title="Models could not be loaded">{models.error}</Notice>;
   if (!models.data) return <Panel><Loading rows={5} /></Panel>;
 
-  const overview: MlOverviewWithInstability = models.data;
+  const overview: MlOverviewV3 = models.data;
   const trainedAt = Object.values(overview.tasks)[0]?.trained_at;
 
   return (
@@ -71,6 +78,8 @@ function ModelsView() {
             <ImpactSection overview={overview} />
             <RetrievalSection overview={overview} />
           </div>
+          <ImpactRankingSection overview={overview} />
+          <ModuleDiscoverySection overview={overview} />
           <div className="grid-2">
             <ModulesSection overview={overview} />
             <AnomalySection overview={overview} />
@@ -82,7 +91,7 @@ function ModelsView() {
   );
 }
 
-function SummaryCards({ overview }: { overview: MlOverviewWithInstability }) {
+function SummaryCards({ overview }: { overview: MlOverviewV3 }) {
   const { defect_risk: defect, commit_intent: intent, change_impact: link, retrieval, modules, anomalies, instability } = overview.tasks;
   const instabilityScores = instability?.result.metrics.model;
   const champion = defect?.result.champion;
@@ -122,10 +131,12 @@ function SummaryCards({ overview }: { overview: MlOverviewWithInstability }) {
     },
     {
       title: "Module discovery",
-      algo: "Louvain community detection",
+      algo: modules?.result.metrics.champion
+        ? `Champion: ${ALGORITHM_NAMES[modules.result.metrics.champion]} (of 4 algorithms, 4 signals)`
+        : "Louvain community detection",
       trained: modules?.status === "trained",
       headline: modules?.result.metrics.modularity_learned?.toFixed(2) ?? "—",
-      unit: "modularity",
+      unit: "modularity of the selected clustering",
       versus: modules?.result.metrics.modularity_directory_baseline !== undefined ? `Directory grouping ${modules.result.metrics.modularity_directory_baseline.toFixed(2)}` : modules?.result.reason,
     },
     {
@@ -177,7 +188,7 @@ function championName(champion: DefectChampion | null | undefined, capitalised =
 
 const forestSeries = { key: "forest", label: "Random forest", color: "var(--warn)" };
 
-function DefectSection({ overview }: { overview: MlOverviewWithInstability }) {
+function DefectSection({ overview }: { overview: MlOverviewV3 }) {
   const { repository } = useRepo();
   const task = overview.tasks.defect_risk;
   if (!task) return null;
@@ -214,6 +225,13 @@ function DefectSection({ overview }: { overview: MlOverviewWithInstability }) {
                     { label: "ROC-AUC", values: { baseline: result.metrics.heuristic_baseline?.roc_auc, model: result.metrics.logistic_regression?.roc_auc, forest: result.metrics.random_forest?.roc_auc, challenger: result.metrics.gradient_boosting?.roc_auc } },
                     { label: "Average precision", values: { baseline: result.metrics.heuristic_baseline?.average_precision, model: result.metrics.logistic_regression?.average_precision, forest: result.metrics.random_forest?.average_precision, challenger: result.metrics.gradient_boosting?.average_precision } },
                     { label: "Precision in top 20%", values: { baseline: result.metrics.heuristic_baseline?.precision_at_top20pct, model: result.metrics.logistic_regression?.precision_at_top20pct, forest: result.metrics.random_forest?.precision_at_top20pct, challenger: result.metrics.gradient_boosting?.precision_at_top20pct } },
+                    ...(result.metrics.logistic_regression?.f1 !== undefined
+                      ? [
+                          { label: "Precision", values: { baseline: result.metrics.heuristic_baseline?.precision, model: result.metrics.logistic_regression?.precision, forest: result.metrics.random_forest?.precision, challenger: result.metrics.gradient_boosting?.precision } },
+                          { label: "Recall", values: { baseline: result.metrics.heuristic_baseline?.recall, model: result.metrics.logistic_regression?.recall, forest: result.metrics.random_forest?.recall, challenger: result.metrics.gradient_boosting?.recall } },
+                          { label: "F1", values: { baseline: result.metrics.heuristic_baseline?.f1, model: result.metrics.logistic_regression?.f1, forest: result.metrics.random_forest?.f1, challenger: result.metrics.gradient_boosting?.f1 } },
+                        ]
+                      : []),
                   ]}
                   series={[
                     { ...baselineSeries, label: "Heuristic baseline" },
@@ -223,8 +241,10 @@ function DefectSection({ overview }: { overview: MlOverviewWithInstability }) {
                   ]}
                 />
               ) : <Notice>{result.metrics.note}</Notice>}
+              {result.metrics.decision_rule && <p className="muted small">{result.metrics.decision_rule}</p>}
             </div>
             <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
+              <DefectFeatures features={result.dataset.features} codeMetrics={result.dataset.code_metrics} labels={labels} />
               {result.calibration.predicted && result.calibration.observed && (
                 <div style={{ display: "grid", gap: 8 }}>
                   <h3>Calibration</h3>
@@ -265,7 +285,7 @@ function DefectSection({ overview }: { overview: MlOverviewWithInstability }) {
   );
 }
 
-function IntentSection({ overview }: { overview: MlOverviewWithInstability }) {
+function IntentSection({ overview }: { overview: MlOverviewV3 }) {
   const task = overview.tasks.commit_intent;
   if (!task) return null;
   const result = task.result;
@@ -310,7 +330,7 @@ function IntentSection({ overview }: { overview: MlOverviewWithInstability }) {
   );
 }
 
-function ImpactSection({ overview }: { overview: MlOverviewWithInstability }) {
+function ImpactSection({ overview }: { overview: MlOverviewV3 }) {
   const task = overview.tasks.change_impact;
   if (!task) return null;
   const result = task.result;
@@ -336,7 +356,7 @@ function ImpactSection({ overview }: { overview: MlOverviewWithInstability }) {
   );
 }
 
-function RetrievalSection({ overview }: { overview: MlOverviewWithInstability }) {
+function RetrievalSection({ overview }: { overview: MlOverviewV3 }) {
   const { repository } = useRepo();
   const task = overview.tasks.retrieval;
   if (!task) return null;
@@ -361,12 +381,16 @@ function RetrievalSection({ overview }: { overview: MlOverviewWithInstability })
   );
 }
 
-function ModulesSection({ overview }: { overview: MlOverviewWithInstability }) {
+function ModulesSection({ overview }: { overview: MlOverviewV3 }) {
   const task = overview.tasks.modules;
   if (!task) return null;
   const result = task.result;
   return (
-    <Panel title="Learned modules" description="Louvain communities on a graph of imports and co-changes, compared with grouping by directory." flush>
+    <Panel
+      title="Learned modules"
+      description={`Clusters from the selected algorithm (${result.metrics.champion ? ALGORITHM_NAMES[result.metrics.champion] : "Louvain"}), compared with grouping by directory. Inferred structure, not declared architecture.`}
+      flush
+    >
       {task.status !== "trained" ? <div className="panel-body"><Abstained reason={result.reason} /></div> : (
         <>
           <div className="panel-body">
@@ -391,7 +415,7 @@ function ModulesSection({ overview }: { overview: MlOverviewWithInstability }) {
   );
 }
 
-function AnomalySection({ overview }: { overview: MlOverviewWithInstability }) {
+function AnomalySection({ overview }: { overview: MlOverviewV3 }) {
   const { inventory } = useRepo();
   const task = overview.tasks.anomalies;
   if (!task) return null;
@@ -417,7 +441,7 @@ function AnomalySection({ overview }: { overview: MlOverviewWithInstability }) {
   );
 }
 
-function InstabilitySection({ overview }: { overview: MlOverviewWithInstability }) {
+function InstabilitySection({ overview }: { overview: MlOverviewV3 }) {
   const { repository } = useRepo();
   const task = overview.tasks.instability;
   if (!task) return null;
@@ -488,5 +512,285 @@ function ActivitySequence({ periods }: { periods: Array<[number, number]> }) {
         </span>
       ))}
     </span>
+  );
+}
+
+const ALGORITHM_NAMES: Record<ClusterAlgorithm, string> = {
+  louvain: "Louvain",
+  agglomerative: "Agglomerative (Ward)",
+  kmeans: "K-Means",
+  dbscan: "DBSCAN",
+};
+
+const ABLATION_NAMES: Record<AblationVariant, string> = {
+  structure_only: "Structure only (imports)",
+  structure_cochange: "Structure + co-change",
+  all_signals: "All four signals",
+};
+
+const RANKING_NAMES: Record<RankingApproach, string> = {
+  static_dependency: "Static dependencies only",
+  co_change: "Co-change only",
+  weighted: "Weighted score",
+  link_model: "Learned link model",
+  learned_weights: "Learned component weights",
+};
+
+const SIGNAL_NAMES: Record<string, string> = {
+  dependency: "dependency",
+  co_change: "co-change",
+  proximity: "proximity",
+  bug_correlation: "bug correlation",
+};
+
+function fmt(value: number | null | undefined, digits = 2) {
+  return value === null || value === undefined ? "—" : value.toFixed(digits);
+}
+
+function DefectFeatures({
+  features,
+  codeMetrics,
+  labels,
+}: {
+  features: string[] | undefined;
+  codeMetrics: { used: string[]; missing: string[]; files_measured: Record<string, number>; note: string } | undefined;
+  labels: Record<string, string>;
+}) {
+  if (!features) return null;
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <h3>Features ({features.length})</h3>
+      <p className="small muted">{features.map((name) => labels[name] ?? name).join(", ")}.</p>
+      {codeMetrics && (
+        <p className="small muted">
+          {codeMetrics.used.length > 0
+            ? `Code metrics used: ${codeMetrics.used.map((name) => `${name} (${codeMetrics.files_measured[name] ?? 0} files measured)`).join(", ")}. `
+            : "No code metrics were recorded on this snapshot's files, so the model uses history and graph features only. "}
+          {codeMetrics.missing.length > 0 && codeMetrics.used.length > 0 ? `Not available: ${codeMetrics.missing.join(", ")}. ` : ""}
+          {codeMetrics.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ScoreTable({
+  caption,
+  rows,
+  highlight,
+}: {
+  caption: string;
+  rows: Array<{ key: string; label: string; scores: Partial<ClusterScores> | undefined }>;
+  highlight?: string;
+}) {
+  return (
+    <div className="table-wrap">
+      <table className="table">
+        <caption className="small muted" style={{ textAlign: "left", padding: "0 20px 8px", captionSide: "top" }}>{caption}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Clustering</th>
+            <th scope="col">Clusters</th>
+            <th scope="col" title="Higher is better, measured in the four-signal space">Silhouette ↑</th>
+            <th scope="col" title="Lower is better, measured in the four-signal space">Davies-Bouldin ↓</th>
+            <th scope="col" title="Higher is better, on the import + co-change graph">Modularity ↑</th>
+            <th scope="col" title="Later co-changes kept inside one cluster, relative to chance">Held-out lift ↑</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} style={row.key === highlight ? { background: "var(--glass-2)" } : undefined}>
+              <th scope="row" style={{ fontWeight: row.key === highlight ? 700 : 500, textAlign: "left" }}>
+                {row.label}
+                {row.key === highlight && <span className="badge badge-ok" style={{ marginLeft: 8 }}>selected</span>}
+              </th>
+              <td>
+                {row.scores?.clusters ?? "—"}
+                {row.scores?.unassigned_share ? <span className="muted small"> ({Math.round(row.scores.unassigned_share * 100)}% unassigned)</span> : null}
+              </td>
+              <td>{fmt(row.scores?.silhouette)}</td>
+              <td>{fmt(row.scores?.davies_bouldin)}</td>
+              <td>{fmt(row.scores?.modularity)}</td>
+              <td>{fmt(row.scores?.heldout_lift)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ModuleDiscoverySection({ overview }: { overview: MlOverviewV3 }) {
+  const task = overview.tasks.modules;
+  if (!task || task.status !== "trained") return null;
+  const result = task.result;
+  const metrics = result.metrics;
+  if (!metrics.algorithms) return null;
+  const algorithms = (Object.keys(ALGORITHM_NAMES) as ClusterAlgorithm[]).filter((name) => metrics.algorithms?.[name]);
+  return (
+    <Panel
+      title="Hidden module discovery"
+      description="Four signals per file (shared import neighbours, co-change history, LSA over path tokens and symbol names, developer overlap), clustered by four algorithms and scored against grouping by directory. Clusters are inferred, not declared architecture."
+      flush
+    >
+      <ScoreTable
+        caption={`${metrics.selection_rule ?? ""}${metrics.heldout?.pairs && metrics.heldout.cutoff ? ` Held-out lift uses ${metrics.heldout.pairs} file pairs changed together after ${formatDate(metrics.heldout.cutoff)}, with history signals rebuilt from earlier commits.` : " Too little later history for a held-out check."}`}
+        highlight={metrics.champion}
+        rows={[
+          ...algorithms.map((name) => ({ key: name, label: ALGORITHM_NAMES[name], scores: metrics.algorithms?.[name] })),
+          { key: "directory", label: `Directory baseline (${metrics.directory_groups ?? "?"} groups)`, scores: metrics.directory_baseline },
+        ]}
+      />
+      <div className="grid-2 panel-body" style={{ alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 8 }}>
+          <h3>Which signals matter? (ablation)</h3>
+          <p className="small muted">
+            {metrics.ablation_algorithm ? ALGORITHM_NAMES[metrics.ablation_algorithm] : "K-Means"} rerun on growing subsets of the signals. Silhouette and Davies-Bouldin are measured in the four-signal space, which favours the full representation; held-out lift is the neutral yardstick.
+          </p>
+          {metrics.ablation && (
+            <div style={{ margin: "0 -20px" }}>
+              <ScoreTable
+                caption="Same algorithm, different inputs."
+                rows={(Object.keys(ABLATION_NAMES) as AblationVariant[]).map((name) => ({ key: name, label: ABLATION_NAMES[name], scores: metrics.ablation?.[name] }))}
+              />
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          <h3>Files in two dimensions</h3>
+          {result.projection && result.projection.length > 0 ? (
+            <>
+              <ClusterScatter modules={result.modules.map((module) => module.name)} points={result.projection} />
+              <p className="small muted">
+                PCA of the four-signal representation{metrics.projection_explained_variance?.length ? ` (explains ${Math.round(metrics.projection_explained_variance.reduce((a, b) => a + b, 0) * 100)}% of variance)` : ""}; colour is the selected clustering. {result.projection.length} files shown. Nearby points are similar by these signals, which is inferred, not proof of a dependency.
+              </p>
+            </>
+          ) : <Empty title="No projection">Too few clustered files to project.</Empty>}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function clusterColor(cluster: number) {
+  return cluster < 0 ? "var(--fixative)" : `hsl(${(cluster * 137.5 + 250) % 360} 62% 52%)`;
+}
+
+function ClusterScatter({ points, modules }: { points: Array<{ path: string; x: number; y: number; cluster: number }>; modules: string[] }) {
+  const width = 360;
+  const height = 240;
+  const pad = 12;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const sx = (value: number) => pad + ((value - minX) / (maxX - minX || 1)) * (width - pad * 2);
+  const sy = (value: number) => height - pad - ((value - minY) / (maxY - minY || 1)) * (height - pad * 2);
+  const shown = modules.slice(0, 8);
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <svg
+        aria-label={`Scatter plot of ${points.length} files coloured by ${modules.length} inferred modules`}
+        role="img"
+        style={{ width: "100%", height: "auto", border: "1px solid var(--rule)", borderRadius: 8 }}
+        viewBox={`0 0 ${width} ${height}`}
+      >
+        {points.map((point) => (
+          <circle cx={sx(point.x)} cy={sy(point.y)} fill={clusterColor(point.cluster)} fillOpacity={point.cluster < 0 ? 0.35 : 0.8} key={point.path} r={points.length > 400 ? 2.2 : 3.5}>
+            <title>{`${point.path}${point.cluster >= 0 ? ` · ${modules[point.cluster] ?? `cluster ${point.cluster + 1}`}` : " · unassigned"}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="small" style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px" }}>
+        {shown.map((name, index) => (
+          <span key={`${name}-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <i aria-hidden style={{ width: 8, height: 8, borderRadius: 4, background: clusterColor(index), display: "inline-block" }} />
+            {name}
+          </span>
+        ))}
+        {modules.length > shown.length && <span className="muted">+{modules.length - shown.length} more</span>}
+      </div>
+    </div>
+  );
+}
+
+function ImpactRankingSection({ overview }: { overview: MlOverviewV3 }) {
+  const task = overview.tasks.change_impact;
+  const evaluation = task?.result.ranking_evaluation;
+  if (!task || !evaluation) return null;
+  const weighted = task.result.weighted_score;
+  const approaches = (Object.keys(RANKING_NAMES) as RankingApproach[]).filter((name) => evaluation.approaches?.[name]);
+  return (
+    <Panel
+      title="Change-impact ranking"
+      description="If a file changes, which files should a reviewer look at? Each approach ranks candidates for every file of a later commit; the other files of that commit are the right answers. This measures co-change, not runtime impact."
+      flush
+    >
+      {evaluation.status !== "evaluated" ? (
+        <div className="panel-body"><Abstained reason={evaluation.reason} /></div>
+      ) : (
+        <>
+          <div className="table-wrap">
+            <table className="table">
+              <caption className="small muted" style={{ textAlign: "left", padding: "0 20px 8px", captionSide: "top" }}>
+                {evaluation.queries} queries from {evaluation.test_commits} commits{evaluation.periods ? ` after ${formatDate(evaluation.periods.test_after)}` : ""}; history before then is used to rank, and learned rankers are trained on earlier pairs only. Average candidate pool: {fmt(evaluation.mean_pool_size, 1)} files.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Approach</th>
+                  <th scope="col">P@5</th>
+                  <th scope="col">R@5</th>
+                  <th scope="col">MAP@5</th>
+                  <th scope="col">P@10</th>
+                  <th scope="col">R@10</th>
+                  <th scope="col">MAP@10</th>
+                </tr>
+              </thead>
+              <tbody>
+                {approaches.map((name) => {
+                  const scores = evaluation.approaches?.[name];
+                  const best = evaluation.best_by_map_at_10 === name;
+                  return (
+                    <tr key={name} style={best ? { background: "var(--glass-2)" } : undefined}>
+                      <th scope="row" style={{ textAlign: "left", fontWeight: best ? 700 : 500 }}>
+                        <span title={evaluation.descriptions?.[name]}>{RANKING_NAMES[name]}</span>
+                        {best && <span className="badge badge-ok" style={{ marginLeft: 8 }}>best MAP@10</span>}
+                      </th>
+                      <td>{fmt(scores?.precision_at_5)}</td>
+                      <td>{fmt(scores?.recall_at_5)}</td>
+                      <td>{fmt(scores?.map_at_5)}</td>
+                      <td>{fmt(scores?.precision_at_10)}</td>
+                      <td>{fmt(scores?.recall_at_10)}</td>
+                      <td>{fmt(scores?.map_at_10)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="grid-2 panel-body" style={{ alignItems: "start" }}>
+            {weighted && (
+              <div style={{ display: "grid", gap: 6 }}>
+                <h3>The weighted score</h3>
+                <p className="small muted">Fixed weights from the specification. Every impact result shows these four components so a reader can see why a file is listed.</p>
+                {(Object.keys(weighted.weights) as Array<keyof typeof weighted.weights>).map((name) => (
+                  <div className="small" key={name}>
+                    <strong>{weighted.weights[name].toFixed(2)} × {SIGNAL_NAMES[name] ?? name}</strong>{" "}
+                    <span className="muted">{weighted.signal_definitions[name]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {evaluation.learned_component_weights && (
+              <div style={{ display: "grid", gap: 8 }}>
+                <h3>Weights a model would choose</h3>
+                <p className="small muted">Logistic-regression coefficients over the same four components, fitted on {evaluation.learned_training_pairs} earlier file pairs. Compare with the fixed weights; they are not used for serving.</p>
+                <DivergingBars items={Object.entries(evaluation.learned_component_weights).map(([name, value]) => ({ label: SIGNAL_NAMES[name] ?? name, value }))} />
+              </div>
+            )}
+          </div>
+          {evaluation.note && <p className="small muted panel-body" style={{ paddingTop: 0 }}>{evaluation.note}</p>}
+        </>
+      )}
+    </Panel>
   );
 }

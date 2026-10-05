@@ -667,3 +667,124 @@ export type UnstableComponent = {
 
 /** Optional overview field: null when the instability model is untrained or abstained. */
 export type RepositoryOverviewInstability = { unstable_components?: UnstableComponent[] | null };
+
+// ---- Multi-signal module discovery, richer defect features, weighted impact ranking.
+
+/** Components of the weighted impact score (impact-weighted@1), each in [0, 1]. */
+export type ImpactSignals = { dependency: number; co_change: number; proximity: number; bug_correlation: number };
+
+/** Each `ImpactAnalysis.impacted[*]` item with the optional weighted-score fields. */
+export type ImpactItemWeighted = ImpactAnalysis["impacted"][number] & {
+  signals?: ImpactSignals | null;
+  /** 0.35·dependency + 0.30·co_change + 0.20·proximity + 0.15·bug_correlation. */
+  weighted_score?: number | null;
+};
+
+export type ImpactAnalysisWeighted = Omit<ImpactAnalysis, "impacted"> & { impacted: ImpactItemWeighted[] };
+
+export type ClusterAlgorithm = "louvain" | "agglomerative" | "kmeans" | "dbscan";
+
+export type ClusterScores = {
+  clusters: number;
+  unassigned_share: number;
+  silhouette: number | null;
+  davies_bouldin: number | null;
+  modularity: number;
+  /** Share of file pairs changed together after the hold-out cut-off that share a cluster. */
+  heldout_within_share: number | null;
+  /** heldout_within_share divided by the chance rate for the same cluster sizes. */
+  heldout_lift: number | null;
+};
+
+export type AblationVariant = "structure_only" | "structure_cochange" | "all_signals";
+
+/** modules-multisignal@2. The older ModulesResult keys are kept and describe the champion. */
+export type ModulesResultV2 = Omit<ModulesResult, "metrics"> & {
+  metrics: ModulesResult["metrics"] & {
+    champion?: ClusterAlgorithm;
+    selection_rule?: string;
+    algorithms?: Partial<Record<ClusterAlgorithm, ClusterScores & { mean_rank?: number; parameters: Record<string, unknown> }>>;
+    directory_baseline?: ClusterScores;
+    beats_directory_baseline?: Record<"silhouette" | "davies_bouldin" | "modularity" | "heldout_lift", boolean | null>;
+    ablation?: Partial<Record<AblationVariant, ClusterScores & { signals: string[] }>>;
+    ablation_algorithm?: ClusterAlgorithm;
+    signals?: Array<{ name: string; label: string }>;
+    heldout?: { cutoff: string | null; pairs: number; note: string };
+    unassigned_files?: number;
+    projection_explained_variance?: number[];
+  };
+  /** Inferred 2-D layout (PCA of the four-signal representation), at most 1500 files; `cluster` indexes `modules`, -1 = unassigned. */
+  projection?: Array<{ path: string; x: number; y: number; cluster: number }>;
+  projection_method?: "pca" | null;
+};
+
+export type DefectScoresV3 = {
+  roc_auc: number;
+  average_precision: number;
+  precision_at_top20pct?: number;
+  recall_at_top20pct?: number;
+  brier?: number;
+  precision?: number;
+  recall?: number;
+  f1?: number;
+};
+
+/** defect-temporal@3: graph centrality, ownership, optional code metrics; precision/recall/F1 at a training-period decision rule. */
+export type DefectResultV3 = Omit<DefectResultV2, "metrics" | "dataset"> & {
+  dataset: DefectResultV2["dataset"] & {
+    features?: string[];
+    code_metrics?: { used: string[]; missing: string[]; files_measured: Record<string, number>; note: string };
+  };
+  metrics: {
+    heuristic_baseline?: DefectScoresV3;
+    logistic_regression?: DefectScoresV3;
+    random_forest?: DefectScoresV3;
+    gradient_boosting?: DefectScoresV3;
+    test_base_rate?: number;
+    decision_rule?: string;
+    note?: string;
+  };
+};
+
+export type RankingApproach = "static_dependency" | "co_change" | "weighted" | "link_model" | "learned_weights";
+
+export type RankingScores = {
+  precision_at_5: number;
+  recall_at_5: number;
+  map_at_5: number;
+  precision_at_10: number;
+  recall_at_10: number;
+  map_at_10: number;
+};
+
+export type ImpactRankingEvaluation = {
+  status: "evaluated" | "insufficient_data";
+  reason?: string;
+  ks?: number[];
+  queries?: number;
+  test_commits?: number;
+  periods?: { history_before: string; learned_labels: string[]; test_after: string };
+  learned_training_pairs?: number;
+  mean_pool_size?: number;
+  approaches?: Partial<Record<RankingApproach, RankingScores>>;
+  descriptions?: Partial<Record<RankingApproach, string>>;
+  best_by_map_at_10?: RankingApproach;
+  weights?: ImpactSignals;
+  signal_definitions?: Record<keyof ImpactSignals, string>;
+  learned_component_weights?: ImpactSignals | null;
+  note?: string;
+};
+
+export type LinkResultV2 = LinkResult & {
+  ranking_evaluation?: ImpactRankingEvaluation;
+  weighted_score?: {
+    weights: ImpactSignals;
+    signal_labels: Record<keyof ImpactSignals, string>;
+    signal_definitions: Record<keyof ImpactSignals, string>;
+  };
+};
+
+export type MlOverviewV3 = Omit<MlOverviewWithInstability, "tasks"> & {
+  tasks: Omit<MlOverviewWithInstability["tasks"], "defect_risk" | "modules" | "change_impact"> &
+    Partial<{ defect_risk: Task<DefectResultV3>; modules: Task<ModulesResultV2>; change_impact: Task<LinkResultV2> }>;
+};

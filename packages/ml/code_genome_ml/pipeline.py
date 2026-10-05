@@ -10,6 +10,7 @@ from .defect import FEATURE_LABELS as DEFECT_FEATURE_LABELS
 from .defect import train_defect_model
 from .impact import FEATURE_LABELS as IMPACT_FEATURE_LABELS
 from .impact import train_link_model
+from .impact_ranking import SIGNAL_DEFINITIONS, SIGNAL_LABELS, WEIGHTS, evaluate_impact_ranking
 from .instability import train_instability_model
 from .intent import train_intent_classifier
 from .modules import discover_modules
@@ -82,6 +83,16 @@ def train_all(inputs: TrainingInputs) -> dict[str, dict[str, Any]]:
     payload = asdict(link)
     payload["training_seconds"] = seconds
     payload["feature_labels"] = IMPACT_FEATURE_LABELS
+    ranking, seconds = _timed(
+        evaluate_impact_ranking, inputs.changes, inputs.imports, fix_shas, len(inputs.files)
+    )
+    payload["ranking_evaluation"] = ranking
+    payload["ranking_seconds"] = seconds
+    payload["weighted_score"] = {
+        "weights": dict(WEIGHTS),
+        "signal_labels": dict(SIGNAL_LABELS),
+        "signal_definitions": dict(SIGNAL_DEFINITIONS),
+    }
     results["change_impact"] = payload
 
     analyzable = {record.path for record in inputs.files}
@@ -107,7 +118,14 @@ def train_all(inputs: TrainingInputs) -> dict[str, dict[str, Any]]:
         "training_seconds": seconds,
     }
 
-    modules, seconds = _timed(discover_modules, sorted(analyzable), inputs.changes, inputs.imports)
+    modules, seconds = _timed(
+        discover_modules,
+        sorted(analyzable),
+        inputs.changes,
+        inputs.imports,
+        {record.path: record.symbols for record in inputs.files},
+        {commit.sha: commit.author for commit in inputs.commits},
+    )
     payload = asdict(modules)
     payload["training_seconds"] = seconds
     results["modules"] = payload

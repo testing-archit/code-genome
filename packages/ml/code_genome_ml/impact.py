@@ -141,6 +141,35 @@ class PairContext:
         ]
 
 
+def sample_negatives(known: list[str], positives: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Up to three uniformly sampled non-co-changing pairs per positive pair."""
+    rng = random.Random(RANDOM_STATE)
+    negatives: set[tuple[str, str]] = set()
+    attempts = 0
+    target = min(len(positives) * 3, len(known) * (len(known) - 1) // 2 - len(positives))
+    while len(negatives) < target and attempts < target * 20:
+        attempts += 1
+        left, right = sorted(rng.sample(known, 2))
+        if (left, right) not in positives:
+            negatives.add((left, right))
+    return negatives
+
+
+def future_pairs(
+    changes: list[ChangeRecord], known: set[str], start: datetime, end: datetime | None
+) -> set[tuple[str, str]]:
+    future: dict[str, set[str]] = defaultdict(set)
+    for change in changes:
+        in_window = change.authored_at >= start and (end is None or change.authored_at < end)
+        if in_window and change.path in known:
+            future[change.commit_sha].add(change.path)
+    positives: set[tuple[str, str]] = set()
+    for files in future.values():
+        if len(files) <= MAX_FILES_PER_COMMIT:
+            positives.update(combinations(sorted(files), 2))
+    return positives
+
+
 def train_link_model(
     changes: list[ChangeRecord], imports: list[ImportRecord], file_count: int
 ) -> LinkModel:
@@ -154,15 +183,7 @@ def train_link_model(
     cutoff = ordered[int(len(ordered) * 0.7)][0]
     context = PairContext(changes, imports, cutoff)
     known = sorted(context.changes)
-    known_set = set(known)
-    future: dict[str, set[str]] = defaultdict(set)
-    for change in changes:
-        if change.authored_at >= cutoff and change.path in known_set:
-            future[change.commit_sha].add(change.path)
-    positives: set[tuple[str, str]] = set()
-    for files in future.values():
-        if len(files) <= MAX_FILES_PER_COMMIT:
-            positives.update(combinations(sorted(files), 2))
+    positives = future_pairs(changes, set(known), cutoff, None)
     dataset: dict[str, object] = {
         "cutoff": cutoff.isoformat(),
         "files_before_cutoff": len(known),
@@ -177,15 +198,7 @@ def train_link_model(
             dataset,
         )
 
-    rng = random.Random(RANDOM_STATE)
-    negatives: set[tuple[str, str]] = set()
-    attempts = 0
-    target = min(len(positives) * 3, len(known) * (len(known) - 1) // 2 - len(positives))
-    while len(negatives) < target and attempts < target * 20:
-        attempts += 1
-        left, right = sorted(rng.sample(known, 2))
-        if (left, right) not in positives:
-            negatives.add((left, right))
+    negatives = sample_negatives(known, positives)
     if len(negatives) < 8:
         return LinkModel(
             MODEL_VERSION,

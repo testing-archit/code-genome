@@ -13,6 +13,12 @@ Timeline (commit-ordered quantiles):
 * Test set:  features from [0, t2), labels from [t2, end]
 * Deployment: model refit on train and test sets, applied to features from [0, end]
 
+Features: history (commits, churn, contributors, earlier fixes, recency, age, co-change
+degree, top-author ownership share), import graph (fan-in, fan-out, betweenness, PageRank)
+and, when FILE graph nodes carry them, code metrics (lines of code, cyclomatic complexity
+estimate, function count). Missing code metrics are dropped, and ``dataset.code_metrics``
+records which were used.
+
 Champion/challenger: an L2 logistic regression, a random forest, and a gradient-boosted
 tree ensemble are all scored on the test period against the transparent heuristic
 baseline. The champion is chosen by average precision (ties favour the simpler model).
@@ -31,23 +37,31 @@ method produced them (``contribution_method``):
 """
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import networkx as nx
 import numpy as np
 from sklearn.calibration import calibration_curve
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .records import ChangeRecord, CommitRecord, FileRecord, ImportRecord, bulk_commit_shas
 
-MODEL_VERSION = "defect-temporal@2"
+MODEL_VERSION = "defect-temporal@3"
 RANDOM_STATE = 7
 MIN_COMMITS = 24
 MIN_CLASS = 3
@@ -64,7 +78,17 @@ FEATURES: tuple[str, ...] = (
     "fan_in",
     "fan_out",
     "log_size_kb",
+    "betweenness",
+    "pagerank",
+    "ownership",
 )
+# Read from FILE graph node properties when the analyzer recorded them. A metric no file
+# has is left out of the model (and the dataset says so) rather than filled with zeros.
+CODE_METRICS: dict[str, str] = {
+    "log_loc": "loc",
+    "log_complexity": "complexity",
+    "log_functions": "functions",
+}
 
 FEATURE_LABELS: dict[str, str] = {
     "log_commits": "commits touching it",
@@ -78,6 +102,12 @@ FEATURE_LABELS: dict[str, str] = {
     "fan_in": "files importing it",
     "fan_out": "files it imports",
     "log_size_kb": "file size",
+    "betweenness": "import-graph betweenness",
+    "pagerank": "import-graph PageRank",
+    "ownership": "top author's share of commits",
+    "log_loc": "lines of code",
+    "log_complexity": "cyclomatic complexity (estimate)",
+    "log_functions": "function count",
 }
 
 
@@ -135,6 +165,37 @@ def _graph_degrees(imports: list[ImportRecord]) -> tuple[dict[str, int], dict[st
     return fan_in, fan_out
 
 
+def _centrality(imports: list[ImportRecord]) -> tuple[dict[str, float], dict[str, float]]:
+    """Betweenness (sampled above 400 files) and PageRank on the directed import graph.
+    Edges point from importer to imported file, so PageRank rewards widely used files."""
+    graph = nx.DiGraph()
+    graph.add_edges_from(
+        (item.source, item.target) for item in imports if item.source != item.target
+    )
+    if graph.number_of_nodes() < 3:
+        return {}, {}
+    sample = None if graph.number_of_nodes() <= 400 else 400
+    betweenness = nx.betweenness_centrality(graph, k=sample, normalized=True, seed=RANDOM_STATE)
+    pagerank = nx.pagerank(graph, alpha=0.85)
+    return betweenness, pagerank
+
+
+def _code_metrics(files: list[FileRecord]) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """Code-metric features available on at least one file, with log-scaled values."""
+    available = []
+    values: dict[str, dict[str, float]] = {}
+    for feature, attribute in CODE_METRICS.items():
+        measured = {
+            item.path: math.log1p(max(0.0, float(getattr(item, attribute))))
+            for item in files
+            if isinstance(getattr(item, attribute), int | float)
+        }
+        if measured:
+            available.append(feature)
+            values[feature] = measured
+    return available, values
+
+
 def _features(
     paths: list[str],
     history: _History,
@@ -142,6 +203,8 @@ def _features(
     sizes: dict[str, int],
     fan_in: dict[str, int],
     fan_out: dict[str, int],
+    centrality: tuple[dict[str, float], dict[str, float]] = ({}, {}),
+    code: dict[str, dict[str, float]] | None = None,
 ) -> np.ndarray:
     window = history.window(None, before)
     reference = before or (window[-1].authored_at if window else datetime.now())
@@ -161,6 +224,7 @@ def _features(
         shas = {item.commit_sha for item in items}
         last = max((item.authored_at for item in items), default=None)
         first = min((item.authored_at for item in items), default=None)
+        by_author = Counter(history.author.get(sha, "") for sha in shas)
         rows.append(
             [
                 math.log1p(len(shas)),
@@ -176,7 +240,11 @@ def _features(
                 fan_in.get(path, 0),
                 fan_out.get(path, 0),
                 math.log1p(sizes.get(path, 0) / 1024),
+                centrality[0].get(path, 0.0),
+                centrality[1].get(path, 0.0),
+                max(by_author.values()) / len(shas) if shas else 0.0,
             ]
+            + [values.get(path, 0.0) for values in (code or {}).values()]
         )
     return np.asarray(rows, dtype=float)
 
@@ -271,14 +339,22 @@ def _reset_contributions(model: Candidate, x_now: np.ndarray, typical: np.ndarra
     return result
 
 
-def _score(truth: np.ndarray, scores: np.ndarray) -> dict[str, float]:
+def _score(truth: np.ndarray, scores: np.ndarray, flag_rate: float) -> dict[str, float]:
+    """Ranking metrics plus precision/recall/F1 at a decision rule fixed from training data:
+    flag the same share of files as were defect-prone in the training period."""
     k = max(1, math.ceil(len(truth) * 0.2))
-    top = np.argsort(-scores)[:k]
+    order = np.argsort(-scores, kind="stable")
+    top = order[:k]
+    flagged = np.zeros(len(truth), dtype=int)
+    flagged[order[: max(1, round(len(truth) * flag_rate))]] = 1
     return {
         "roc_auc": round(float(roc_auc_score(truth, scores)), 4),
         "average_precision": round(float(average_precision_score(truth, scores)), 4),
         "precision_at_top20pct": round(float(truth[top].mean()), 4),
         "recall_at_top20pct": round(float(truth[top].sum() / max(1, truth.sum())), 4),
+        "precision": round(float(precision_score(truth, flagged, zero_division=0)), 4),
+        "recall": round(float(recall_score(truth, flagged, zero_division=0)), 4),
+        "f1": round(float(f1_score(truth, flagged, zero_division=0)), 4),
     }
 
 
@@ -313,12 +389,26 @@ def train_defect_model(
     paths = sorted(path for path in sizes if path in changed_paths) or sorted(changed_paths)
     history = _History(commits, changes, fix_shas)
     fan_in, fan_out = _graph_degrees(imports)
+    centrality = _centrality(imports)
+    available, code = _code_metrics(files)
+    features = list(FEATURES) + available
+    dataset["code_metrics"] = {
+        "used": [CODE_METRICS[name] for name in available],
+        "missing": [CODE_METRICS[name] for name in CODE_METRICS if name not in available],
+        "files_measured": {CODE_METRICS[name]: len(values) for name, values in code.items()},
+        "note": (
+            "Code metrics come from FILE graph node properties of the analysed snapshot. "
+            "Metrics no file carries are left out of the model; files without a value get 0. "
+            "Snapshot metrics (and the import graph) are applied to earlier cut-offs too, so "
+            "they are slightly anachronistic in the temporal evaluation."
+        ),
+    }
     t1 = timeline[int(len(timeline) * 0.5)].authored_at
     t2 = timeline[int(len(timeline) * 0.75)].authored_at
 
-    x_train = _features(paths, history, t1, sizes, fan_in, fan_out)
+    x_train = _features(paths, history, t1, sizes, fan_in, fan_out, centrality, code)
     y_train = _labels(paths, history, t1, t2)
-    x_test = _features(paths, history, t2, sizes, fan_in, fan_out)
+    x_test = _features(paths, history, t2, sizes, fan_in, fan_out, centrality, code)
     y_test = _labels(paths, history, t2, None)
     dataset.update(
         {
@@ -328,7 +418,7 @@ def train_defect_model(
             "train_negative": int(len(y_train) - y_train.sum()),
             "test_positive": int(y_test.sum()),
             "test_negative": int(len(y_test) - y_test.sum()),
-            "features": list(FEATURES),
+            "features": features,
         }
     )
     if min(y_train.sum(), len(y_train) - y_train.sum()) < MIN_CLASS:
@@ -349,10 +439,15 @@ def train_defect_model(
     importance: list[tuple[str, float]] = []
     evaluable = min(y_test.sum(), len(y_test) - y_test.sum()) >= 1
     if evaluable:
-        metrics["heuristic_baseline"] = _score(y_test, _heuristic(x_test))
+        flag_rate = float(y_train.mean())
+        metrics["decision_rule"] = (
+            f"Precision, recall and F1 flag the top {flag_rate:.0%} of files, the share that "
+            "was defect-prone in the training period (fixed before seeing the test period)."
+        )
+        metrics["heuristic_baseline"] = _score(y_test, _heuristic(x_test), flag_rate)
         for name, model in candidates.items():
             probabilities = model.predict_proba(x_test)[:, 1]
-            scores = _score(y_test, probabilities)
+            scores = _score(y_test, probabilities, flag_rate)
             scores["brier"] = round(float(brier_score_loss(y_test, probabilities)), 4)
             metrics[name] = scores
         champion = max(
@@ -379,7 +474,7 @@ def train_defect_model(
         importance = sorted(
             (
                 (name, round(float(value), 4))
-                for name, value in zip(FEATURES, permutation.importances_mean, strict=True)
+                for name, value in zip(features, permutation.importances_mean, strict=True)
             ),
             key=lambda item: -item[1],
         )
@@ -392,7 +487,7 @@ def train_defect_model(
     y_all = np.concatenate([y_train, y_test])
     final = _build(champion)
     final.fit(x_all, y_all)
-    x_now = _features(paths, history, None, sizes, fan_in, fan_out)
+    x_now = _features(paths, history, None, sizes, fan_in, fan_out, centrality, code)
     probabilities = final.predict_proba(x_now)[:, 1]
     if isinstance(final, Pipeline):
         scaler: StandardScaler = final.named_steps["scale"]
@@ -417,7 +512,7 @@ def train_defect_model(
     for index, path in enumerate(paths):
         probability = float(probabilities[index])
         ranked = sorted(
-            zip(FEATURES, contributions[index], strict=True), key=lambda item: -abs(item[1])
+            zip(features, contributions[index], strict=True), key=lambda item: -abs(item[1])
         )
         predictions.append(
             FilePrediction(
@@ -431,7 +526,7 @@ def train_defect_model(
                 contributions=[(name, round(float(value), 4)) for name, value in ranked[:4]],
                 features={
                     name: round(float(value), 4)
-                    for name, value in zip(FEATURES, x_now[index], strict=True)
+                    for name, value in zip(features, x_now[index], strict=True)
                 },
                 evidence_shas=(fixes_by_path[path][:3] + recent_by_path[path][:3])[:5],
             )
