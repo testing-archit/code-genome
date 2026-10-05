@@ -11,8 +11,10 @@ os.environ["CODE_GENOME_CREDENTIAL_ENCRYPTION_KEY"] = base64.urlsafe_b64encode(
 ).decode()
 
 import pytest
+from code_genome_api import main
 from code_genome_api.database import Base, get_db
 from code_genome_api.main import app
+from code_genome_api.rate_limit import FixedWindowLimiter
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,6 +41,8 @@ def client(session_factory: sessionmaker[Session]) -> Generator[TestClient, None
             yield session
 
     app.dependency_overrides[get_db] = override_db
+    # Every test client shares one host, so give each test its own rate-limit window.
+    main.request_limiter = FixedWindowLimiter()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

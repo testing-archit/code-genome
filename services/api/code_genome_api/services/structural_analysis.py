@@ -18,6 +18,8 @@ from code_genome_git import (
     GitRepository,
     RepositoryBranchRef,
     RepositoryLimitError,
+    RepositoryManifestFile,
+    RepositorySourceFile,
     RepositorySourceSnapshot,
     sync_github_repository,
 )
@@ -39,6 +41,7 @@ from ..models import (
     FileManifestEntry,
     GraphEdge,
     GraphNode,
+    KnowledgeChunkRecord,
     ModuleCandidate,
     ParseDiagnostic,
     Provenance,
@@ -48,12 +51,14 @@ from ..models import (
     RepositorySnapshot,
     utc_now,
 )
+from . import knowledge
 from .credentials import (
     CredentialCipher,
     CredentialConfigurationError,
     CredentialDecryptionError,
     EncryptedCredential,
 )
+from .knowledge import ChunkKind
 from .ml import train_snapshot_models
 
 SessionFactory = Callable[[], Session]
@@ -427,6 +432,89 @@ def _persist_graph(
     return snapshot
 
 
+def _knowledge_files(
+    git_repository: GitRepository, source_snapshot: RepositorySourceSnapshot
+) -> list[tuple[RepositorySourceFile, ChunkKind]]:
+    """Pick docs, manifests, and text source worth citing, most important first."""
+    chosen: list[tuple[RepositoryManifestFile, ChunkKind]] = []
+    for entry in source_snapshot.manifest:
+        kind = knowledge.classify(entry.path)
+        if kind is not None and entry.mode != "120000" and entry.size <= knowledge.MAX_FILE_BYTES:
+            chosen.append((entry, kind))
+    chosen.sort(key=lambda item: knowledge.priority(item[0].path, item[1]))
+    chosen = chosen[: knowledge.MAX_FILES]
+    kinds = {entry.path: kind for entry, kind in chosen}
+    already_read = {item.path: item for item in source_snapshot.files if item.path in kinds}
+    budget = knowledge.MAX_TOTAL_BYTES - sum(item.size for item in already_read.values())
+    fetched = git_repository.read_blobs(
+        [entry for entry, _ in chosen if entry.path not in already_read],
+        max_file_bytes=knowledge.MAX_FILE_BYTES,
+        max_total_bytes=max(1, budget),
+    )
+    files = {**already_read, **{item.path: item for item in fetched}}
+    return sorted(
+        ((files[path], kinds[path]) for path in files),
+        key=lambda item: knowledge.priority(item[0].path, item[1]),
+    )
+
+
+def _persist_knowledge(
+    db: Session,
+    repository: Repository,
+    snapshot: RepositorySnapshot,
+    files: list[tuple[RepositorySourceFile, ChunkKind]],
+) -> int:
+    """Store cited chunks with provenance. Idempotent per snapshot."""
+    existing = db.scalar(
+        select(KnowledgeChunkRecord.id).where(KnowledgeChunkRecord.snapshot_id == snapshot.id)
+    )
+    if existing is not None:
+        return 0
+    stored = 0
+    for source_file, kind in files:
+        for chunk in knowledge.chunk_file(source_file.path, kind, source_file.content):
+            if stored >= knowledge.MAX_CHUNKS:
+                return stored
+            provenance_id = _stable_id(
+                "ev", repository.id, snapshot.commit_sha, chunk.path, chunk.ordinal, "knowledge"
+            )
+            db.add(
+                Provenance(
+                    id=provenance_id,
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    snapshot_id=snapshot.id,
+                    kind="knowledge",
+                    repository_sha=snapshot.commit_sha,
+                    file_path=chunk.path,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    extractor_version=knowledge.KNOWLEDGE_VERSION,
+                )
+            )
+            db.flush()
+            db.add(
+                KnowledgeChunkRecord(
+                    id=_stable_id("kch", snapshot.id, chunk.path, chunk.ordinal),
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    snapshot_id=snapshot.id,
+                    provenance_id=provenance_id,
+                    path=chunk.path,
+                    blob_sha=source_file.blob_sha,
+                    kind=chunk.kind,
+                    ordinal=chunk.ordinal,
+                    heading=chunk.heading,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    text=chunk.text,
+                    analysis_version=knowledge.KNOWLEDGE_VERSION,
+                )
+            )
+            stored += 1
+    return stored
+
+
 def _train_models(
     session_factory: SessionFactory, workspace_id: str, repository_id: str, commit_sha: str
 ) -> None:
@@ -511,6 +599,7 @@ def run_structural_analysis(
             mine_commit_changes(git_repository.git_directory, tuple(item.sha for item in commits)),
             tuple(item.path for item in source_snapshot.files),
         )
+        knowledge_files = _knowledge_files(git_repository, source_snapshot)
         _set_progress(session_factory, run_id, 0.4)
 
         with session_factory() as db:
@@ -539,6 +628,7 @@ def run_structural_analysis(
             if existing:
                 _persist_manifest(db, current_repository, existing, source_snapshot)
                 _persist_evolution(db, current_repository, existing, evolution)
+                backfilled = _persist_knowledge(db, current_repository, existing, knowledge_files)
                 current_run = db.scalar(
                     select(AnalysisRun).where(
                         AnalysisRun.id == run_id,
@@ -552,7 +642,12 @@ def run_structural_analysis(
                     current_run.progress = 1.0
                     current_run.completed_at = utc_now()
                     current_run.diagnostics = [
-                        "Reused the existing immutable snapshot for this repository commit."
+                        "Reused the existing immutable snapshot for this repository commit.",
+                        *(
+                            [f"Added {backfilled} project knowledge chunks to the snapshot."]
+                            if backfilled
+                            else []
+                        ),
                     ]
                     db.commit()
                 return
@@ -582,6 +677,7 @@ def run_structural_analysis(
                 raise GitOperationError("Analysis scope disappeared before publication.")
             snapshot = _persist_graph(db, current_run, current_repository, source_snapshot, graph)
             _persist_evolution(db, current_repository, snapshot, evolution)
+            chunk_count = _persist_knowledge(db, current_repository, snapshot, knowledge_files)
             current_run.snapshot_sha = source_snapshot.commit_sha
             current_run.version = graph.analysis_version
             current_run.state = "SUCCEEDED"
@@ -595,6 +691,8 @@ def run_structural_analysis(
                 f"Derived {len(evolution.co_changes)} co-change edges and "
                 f"{len(evolution.modules)} inferred modules.",
                 f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
+                f"Stored {chunk_count} cited knowledge chunks from {len(knowledge_files)} "
+                "docs, manifests, and source files.",
             ]
             db.commit()
         _train_models(session_factory, workspace_id, repository_id, source_snapshot.commit_sha)

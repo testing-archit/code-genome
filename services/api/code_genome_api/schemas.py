@@ -5,6 +5,8 @@ from typing import Any, Literal
 from code_genome_git import normalize_github_url, validate_ref
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from .services.diffs import DiffError, normalize_repository_path
+
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
@@ -480,3 +482,155 @@ class SearchResponse(BaseModel):
     hits: list[SearchHitResponse]
     message: str | None
     limitations: list[str]
+
+
+class ChangeImpactCreate(BaseModel):
+    """A proposed change, given as a unified diff, a list of paths, or both."""
+
+    diff: str | None = Field(default=None, max_length=900_000)
+    paths: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator("paths")
+    @classmethod
+    def validate_paths(cls, value: list[str]) -> list[str]:
+        try:
+            return [normalize_repository_path(item) for item in value]
+        except DiffError as error:
+            raise ValueError(str(error)) from error
+
+
+class ChangedFileResponse(BaseModel):
+    path: str
+    change: Literal["added", "modified", "deleted", "renamed", "listed"]
+    previous_path: str | None
+    additions: int
+    deletions: int
+    in_snapshot: bool
+    risk_score: float | None
+    risk_rationale: str | None
+    risk_model: str | None
+    modules: list[str]
+    evidence_ids: list[str]
+
+
+class ChangeImpactItemResponse(BaseModel):
+    path: str
+    score: float
+    reasons: list[str]
+    evidence_ids: list[str]
+    via: list[str]
+    modules: list[str]
+
+
+class ChangeModuleResponse(BaseModel):
+    name: str
+    changed_files: int
+    impacted_files: int
+    inferred: bool
+
+
+class ChangeImpactSummary(BaseModel):
+    changed_files: int
+    changed_in_snapshot: int
+    impacted_files: int
+    modules_touched: int
+    max_risk: float | None
+    high_risk_files: int
+
+
+class ChangeImpactResponse(BaseModel):
+    repository_id: str
+    snapshot_id: str
+    snapshot_sha: str
+    analysis_version: str
+    generated_at: datetime
+    summary: ChangeImpactSummary
+    changed: list[ChangedFileResponse]
+    impacted: list[ChangeImpactItemResponse]
+    modules: list[ChangeModuleResponse]
+    limitations: list[str]
+
+
+class SnapshotSummaryResponse(BaseModel):
+    id: str
+    commit_sha: str
+    tree_sha: str
+    analysis_version: str
+    run_id: str
+    refs: list[str]
+    published_at: datetime
+
+
+class ComparedFileResponse(BaseModel):
+    path: str
+    base_blob_sha: str | None
+    head_blob_sha: str | None
+    size_delta: int
+
+
+class ComparedImportResponse(BaseModel):
+    source: str
+    target: str
+    evidence_id: str
+
+
+class ComparedModuleResponse(BaseModel):
+    name: str
+    status: Literal["added", "removed", "changed"]
+    added_files: list[str]
+    removed_files: list[str]
+    inferred: bool
+
+
+class ComparedHotspotResponse(BaseModel):
+    path: str
+    base_score: float | None
+    head_score: float | None
+    delta: float
+
+
+class ComparisonCounts(BaseModel):
+    files_added: int
+    files_removed: int
+    files_modified: int
+    imports_added: int
+    imports_removed: int
+    modules_changed: int
+
+
+class SnapshotComparisonResponse(BaseModel):
+    repository_id: str
+    base: SnapshotSummaryResponse
+    head: SnapshotSummaryResponse
+    generated_at: datetime
+    unavailable: list[Literal["files", "imports", "modules", "hotspots"]]
+    counts: ComparisonCounts
+    files_added: list[ComparedFileResponse]
+    files_removed: list[ComparedFileResponse]
+    files_modified: list[ComparedFileResponse]
+    imports_added: list[ComparedImportResponse]
+    imports_removed: list[ComparedImportResponse]
+    modules: list[ComparedModuleResponse]
+    hotspots: list[ComparedHotspotResponse]
+    limitations: list[str]
+
+
+class RepositoryAutomationPut(BaseModel):
+    auto_analyze: bool
+
+
+class RepositoryAutomationResponse(BaseModel):
+    repository_id: str
+    auto_analyze: bool
+    branch: str
+    webhook_configured: bool
+    webhook_path: str
+    events: list[str]
+
+
+class WebhookResultResponse(BaseModel):
+    delivery_id: str
+    event: str
+    outcome: Literal["queued", "coalesced", "ignored", "duplicate", "pong"]
+    queued_run_ids: list[str]
+    detail: str

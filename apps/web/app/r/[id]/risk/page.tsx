@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { ExportButtons } from "../../../../components/export-buttons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Meter, Notice, Panel, SearchField } from "../../../../components/ui";
 import { api } from "../../../../lib/api";
@@ -39,7 +40,12 @@ function RiskView() {
             ? `Probability that a bug-fix commit touches the file next, from ${risk.data?.scores[0]?.model_version}. See Models for its evaluation.`
             : "Ranks files against each other with a transparent heuristic. Train models on the Models tab for learned probabilities."
         }
-        actions={<div style={{ width: 220 }}><SearchField label="Filter ranked files" onChange={setQuery} placeholder="Filter" value={query} /></div>}
+        actions={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <div style={{ width: 200 }}><SearchField label="Filter ranked files" onChange={setQuery} placeholder="Filter" value={query} /></div>
+            <ExportButtons disabled={!risk.data} kind="risk" repositoryId={repository.id} />
+          </div>
+        }
         flush
       >
         {risk.loading ? <Loading rows={8} /> : scores.length === 0 ? <Empty title="Nothing ranked">Risk needs change history. Analyze a branch with more commits.</Empty> : (

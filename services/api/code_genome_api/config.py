@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     mirror_root: str = "/tmp/code-genome-mirrors"
     credential_encryption_key: SecretStr | None = None
     credential_key_version: str = "local-v1"
+    github_webhook_secret: SecretStr | None = None
     environment: Literal["development", "test", "production"] = "development"
     auth_mode: Literal["development", "oidc"] = "development"
     oidc_issuer: str | None = None
@@ -46,7 +47,7 @@ class Settings(BaseSettings):
     )
     gemini_live_session_minutes: int = 15
     gemini_timeout_seconds: float = 20
-    gemini_max_output_tokens: int = 700
+    gemini_max_output_tokens: int = 1200
 
     def validate_runtime(self) -> None:
         if self.environment == "production" and self.auth_mode != "oidc":
@@ -67,6 +68,9 @@ class Settings(BaseSettings):
             raise RuntimeError("Gemini Live sessions must last between 2 and 30 minutes")
         if not 128 <= self.gemini_max_output_tokens <= 4096:
             raise RuntimeError("Gemini output tokens must be between 128 and 4096")
+        secret = self.github_webhook_secret
+        if secret is not None and 0 < len(secret.get_secret_value()) < 16:
+            raise RuntimeError("GitHub webhook secret must be at least 16 characters")
 
     @property
     def allowed_origins(self) -> list[str]:

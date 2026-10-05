@@ -3,28 +3,41 @@ import type {
   AnswerLanguage,
   Architecture,
   AuditEventRecord,
+  ChangeImpact,
   Conversation,
   ConversationSummary,
   ConversationTurn,
   DeliveryReport,
   Evidence,
+  ExportFormat,
+  ExportKind,
   GroundedAnswer,
   GraphProjection,
   ImpactAnalysis,
   MlOverview,
   ProblemDetail,
   Repository,
+  RepositoryAutomation,
   RepositoryConnection,
   RepositoryInventory,
   RiskAnalysis,
   SearchResults,
+  SnapshotComparison,
+  SnapshotSummary,
   VoiceName,
   VoiceSession,
 } from "@code-genome/contracts";
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+export const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 export const workspaceId = process.env.NEXT_PUBLIC_WORKSPACE_ID ?? "ws_demo";
 const userId = process.env.NEXT_PUBLIC_USER_ID ?? "usr_demo";
+
+export type StreamHandlers = {
+  onDelta: (text: string) => void;
+  onStatus?: (model: string) => void;
+  onFallback?: () => void;
+  signal?: AbortSignal;
+};
 
 export class ApiError extends Error {
   constructor(
@@ -133,6 +146,37 @@ export const api = {
       `/repositories/${repositoryId}/impact?${new URLSearchParams({ path })}`,
     ),
 
+  checkChange: (repositoryId: string, diff: string, paths: string[]) =>
+    request<ChangeImpact>(`/repositories/${repositoryId}/impact/change`, {
+      method: "POST",
+      body: JSON.stringify({ diff: diff.trim() ? diff : null, paths }),
+    }),
+  listSnapshots: (repositoryId: string) =>
+    request<SnapshotSummary[]>(`/repositories/${repositoryId}/snapshots`),
+  compareSnapshots: (repositoryId: string, base: string, head: string) =>
+    request<SnapshotComparison>(
+      `/repositories/${repositoryId}/compare?${new URLSearchParams({ base, head })}`,
+    ),
+  downloadExport: async (
+    repositoryId: string,
+    kind: ExportKind,
+    format: ExportFormat,
+    range?: { base: string; head: string },
+  ) => {
+    const params = new URLSearchParams({ format, ...(range ?? {}) });
+    const response = await send(`/repositories/${repositoryId}/exports/${kind}?${params}`);
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${kind}.${format}`;
+    saveBlob(await response.blob(), filename);
+  },
+  getAutomation: (repositoryId: string) =>
+    request<RepositoryAutomation>(`/repositories/${repositoryId}/automation`),
+  putAutomation: (repositoryId: string, autoAnalyze: boolean) =>
+    request<RepositoryAutomation>(`/repositories/${repositoryId}/automation`, {
+      method: "PUT",
+      body: JSON.stringify({ auto_analyze: autoAnalyze }),
+    }),
+
   ask: (repositoryId: string, question: string, language: AnswerLanguage, channel: "text" | "voice" = "text") =>
     request<GroundedAnswer>("/chat/answers", {
       method: "POST",
@@ -157,6 +201,50 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, language, channel: "text" }),
     }),
+  /**
+   * Ask a follow-up and receive the answer while Gemini writes it. `onDelta` gets
+   * unverified draft text; the resolved turn is the stored, citation-checked answer.
+   */
+  streamMessage: async (
+    conversationId: string,
+    content: string,
+    language: AnswerLanguage,
+    handlers: StreamHandlers,
+  ): Promise<ConversationTurn> => {
+    const response = await send(`/conversations/${conversationId}/messages/stream`, {
+      method: "POST",
+      headers: { Accept: "text/event-stream" },
+      body: JSON.stringify({ content, language, channel: "text" }),
+      signal: handlers.signal,
+    });
+    if (!response.body) throw new ApiError("Streaming is not supported by this browser.", 0, null);
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+        const event = /^event: (.+)$/m.exec(block)?.[1];
+        const data = /^data: (.*)$/m.exec(block)?.[1];
+        if (!event || data === undefined) continue;
+        const payload: unknown = JSON.parse(data);
+        if (event === "delta") handlers.onDelta((payload as { text: string }).text);
+        else if (event === "status") handlers.onStatus?.((payload as { model: string }).model);
+        else if (event === "fallback") handlers.onFallback?.();
+        else if (event === "done") return payload as ConversationTurn;
+        else if (event === "error") {
+          const problem = payload as { code: string; detail: string };
+          throw new ApiError(problem.detail, 500, problem.code);
+        }
+      }
+    }
+    throw new ApiError("The answer stream ended early. Try again.", 0, "STREAM_INCOMPLETE");
+  },
   deleteConversation: (conversationId: string) =>
     request<void>(`/conversations/${conversationId}`, { method: "DELETE" }),
 

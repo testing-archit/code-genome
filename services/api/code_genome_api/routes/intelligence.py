@@ -1,7 +1,6 @@
 from typing import Any
 
-from code_genome_intelligence import ImpactRelation, RiskInput, rank_impact, score_risks
-from code_genome_ml import predict_impact
+from code_genome_intelligence import RiskInput, score_risks
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -11,10 +10,7 @@ from ..errors import AppError
 from ..ids import new_id
 from ..models import (
     AnswerFeedback,
-    CoChangeEdge,
     FileHotspot,
-    GraphEdge,
-    GraphNode,
     GroundedAnswer,
     Repository,
     RepositorySnapshot,
@@ -25,13 +21,13 @@ from ..schemas import (
     AnswerFeedbackResponse,
     GroundedAnswerCreate,
     GroundedAnswerResponse,
-    ImpactItemResponse,
     ImpactResponse,
     RiskResponse,
     RiskScoreResponse,
 )
 from ..services import ml
 from ..services.grounding import produce_grounded_answer
+from ..services.impact import impact_for_paths
 
 router = APIRouter(tags=["intelligence"])
 
@@ -206,90 +202,12 @@ def get_impact(
 ) -> ImpactResponse:
     _repository(db, repository_id, actor)
     snapshot = _snapshot(db, repository_id, actor)
-    relations = [
-        ImpactRelation(
-            item.left_path,
-            item.right_path,
-            "co_change",
-            item.confidence,
-            tuple(f"commit:{sha}" for sha in item.evidence_shas),
-        )
-        for item in db.scalars(
-            select(CoChangeEdge).where(
-                CoChangeEdge.snapshot_id == snapshot.id,
-                (CoChangeEdge.left_path == path) | (CoChangeEdge.right_path == path),
-            )
-        )
-    ]
-    nodes = {
-        item.id: item
-        for item in db.scalars(select(GraphNode).where(GraphNode.snapshot_id == snapshot.id))
-    }
-    for edge in db.scalars(
-        select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id, GraphEdge.type == "IMPORTS")
-    ):
-        source = nodes.get(edge.from_node)
-        target = nodes.get(edge.to_node)
-        if source is None or target is None:
-            continue
-        if source.natural_key == path or target.natural_key == path:
-            relations.append(
-                ImpactRelation(
-                    source.natural_key,
-                    target.natural_key,
-                    "imports",
-                    edge.confidence,
-                    (f"evidence:{edge.provenance_id}",),
-                )
-            )
-    results = rank_impact(path, tuple(relations))
-    impacted = {
-        item.path: ImpactItemResponse(
-            path=item.path,
-            score=item.score,
-            reasons=list(item.reasons),
-            evidence_ids=list(item.evidence_ids),
-        )
-        for item in results
-    }
-    limitations = [
-        "Impact is a one-hop traversal of observed imports and repeated co-change.",
-        "Absence from this result does not establish absence of runtime impact.",
-    ]
-    link_model = ml.trained_result(db, snapshot, "change_impact")
-    if link_model is not None:
-        inputs = ml.training_inputs(db, snapshot)
-        predictions = predict_impact(
-            link_model,
-            path,
-            inputs.changes,
-            inputs.imports,
-            [record.path for record in inputs.files],
-        )
-        for prediction in predictions:
-            reason = f"model predicts co-change p={prediction.probability:.2f} (inferred" + (
-                f"; {', '.join(prediction.reasons)})" if prediction.reasons else ")"
-            )
-            existing = impacted.get(prediction.path)
-            if existing:
-                existing.reasons.append(reason)
-                existing.score = round(max(existing.score, prediction.probability), 4)
-            elif prediction.probability >= 0.2:
-                impacted[prediction.path] = ImpactItemResponse(
-                    path=prediction.path,
-                    score=prediction.probability,
-                    reasons=[reason],
-                    evidence_ids=[],
-                )
-        limitations.append(
-            f"Model-predicted items come from {link_model['model_version']}, trained on this "
-            "repository's co-change history; they are inferred and carry no direct evidence."
-        )
+    results, limitations = impact_for_paths(db, snapshot, [path])
     return ImpactResponse(
         repository_id=repository_id,
         snapshot_sha=snapshot.commit_sha,
         selected_path=path,
-        impacted=sorted(impacted.values(), key=lambda item: (-item.score, item.path))[:25],
+        impacted=results[path][:25],
         limitations=limitations,
     )
 

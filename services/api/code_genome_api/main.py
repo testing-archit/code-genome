@@ -15,15 +15,19 @@ from .rate_limit import FixedWindowLimiter
 from .routes import (
     analyses,
     architecture,
+    changes,
     conversations,
     delivery_reports,
+    exports,
     graph,
     health,
     intelligence,
     ml,
     operations,
     repositories,
+    snapshots,
     voice,
+    webhooks,
     workspaces,
 )
 
@@ -65,6 +69,7 @@ app.add_middleware(
         "X-User-ID",
         "X-Workspace-ID",
     ],
+    expose_headers=["Content-Disposition", "X-Content-SHA256", "X-Request-ID"],
 )
 app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
@@ -128,6 +133,10 @@ app.include_router(graph.router, prefix="/api/v1")
 app.include_router(architecture.router, prefix="/api/v1")
 app.include_router(delivery_reports.router, prefix="/api/v1")
 app.include_router(intelligence.router, prefix="/api/v1")
+app.include_router(changes.router, prefix="/api/v1")
+app.include_router(snapshots.router, prefix="/api/v1")
+app.include_router(exports.router, prefix="/api/v1")
+app.include_router(webhooks.router, prefix="/api/v1")
 app.include_router(operations.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(voice.router, prefix="/api/v1")

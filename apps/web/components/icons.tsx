@@ -57,3 +57,5 @@ export const DownloadIcon = (p: IconProps) => <Icon {...p}><path d="M12 4v11M7 1
 export const LockIcon = (p: IconProps) => <Icon {...p}><rect height="9" rx="1.5" width="14" x="5" y="10.5" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></Icon>;
 export const PlayIcon = (p: IconProps) => <Icon {...p}><path d="M8 5.5v13l10.5-6.5z" /></Icon>;
 export const ModelsIcon = (p: IconProps) => <Icon {...p}><circle cx="5" cy="6" r="1.8" /><circle cx="5" cy="18" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="7" r="1.8" /><circle cx="19" cy="17" r="1.8" /><path d="M6.6 6.9 10.4 11M6.6 17.1l3.8-4.1M13.7 11.2l3.6-3.2M13.7 12.8l3.6 3.2" /></Icon>;
+export const DiffIcon = (p: IconProps) => <Icon {...p}><path d="M7 4v10M2 9h10M5 19h10" /><path d="M16 4h4v4M20 4l-6 6" /></Icon>;
+export const CompareIcon = (p: IconProps) => <Icon {...p}><rect height="14" rx="1.5" width="6" x="3" y="5" /><rect height="14" rx="1.5" width="6" x="15" y="5" /><path d="M10.5 9h3M12.5 7.5 14 9l-1.5 1.5M13.5 15h-3M11.5 13.5 10 15l1.5 1.5" /></Icon>;

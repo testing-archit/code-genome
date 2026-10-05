@@ -28,6 +28,13 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `POST /repositories/{id}/conversations` | start a conversation | `201 ConversationSummary` |
 | `GET /conversations/{id}` | messages, each assistant turn with its cited answer | `200 Conversation` |
 | `POST /conversations/{id}/messages` | ask a follow-up; history resolves references only | `201 ConversationTurn` |
+| `POST /conversations/{id}/messages/stream` | same as above as `text/event-stream`: `status`, `delta` (unverified draft), `fallback`, `done` (stored `ConversationTurn`), `error`; nothing is stored unless the stream completes | `200 text/event-stream` |
+| `POST /repositories/{id}/impact/change` | rank impact of a unified diff and/or path list against the latest snapshot | `200 ChangeImpact` |
+| `GET /repositories/{id}/snapshots` | published snapshots, newest first | `200 SnapshotSummary[]` |
+| `GET /repositories/{id}/compare?base=&head=` | files, imports, inferred modules, hotspots between two snapshots; sections missing from either side are listed in `unavailable` | `200 SnapshotComparison` |
+| `GET /repositories/{id}/exports/{architecture\|risk\|comparison}?format=md\|json` | cited, audited report download | `200 text/markdown` or JSON |
+| `GET/PUT /repositories/{id}/automation` | opt in to push-triggered re-analysis (owner/admin) | `200 RepositoryAutomation` |
+| `POST /webhooks/github` | GitHub `push`/`ping`; HMAC `X-Hub-Signature-256` with `CODE_GENOME_GITHUB_WEBHOOK_SECRET`, delivery-ID replay protection | `202`/`200 WebhookResult` |
 | `DELETE /conversations/{id}` | delete a conversation (answers stay audited) | `204` |
 | `POST /voice/sessions` | mint a single-use Gemini Live token with locked setup | `201 VoiceSession` |
 | `GET /repositories/{id}/ml` | trained models, evaluations, and outputs for the latest snapshot | `200 MlOverview` |

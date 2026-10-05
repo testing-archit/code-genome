@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { ExportButtons } from "../../../../components/export-buttons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Meter, Notice, Panel } from "../../../../components/ui";
 import { moduleColor, nodeTitle } from "../../../../lib/format";
@@ -24,7 +25,7 @@ function ArchitectureView() {
     <>
       <Notice>Modules are inferred from directory structure and co-change history. Treat them as a map to check, not a statement of design intent.</Notice>
       <div className="split">
-        <Panel title="Modules" description={`${data.modules.length} inferred by ${data.analysis_version}`} flush>
+        <Panel title="Modules" description={`${data.modules.length} inferred by ${data.analysis_version}`} actions={<ExportButtons kind="architecture" repositoryId={repository.id} />} flush>
           {data.modules.length === 0 ? <Empty title="No modules inferred">The snapshot has too few files or too little history.</Empty> : (
             <div>
               {data.modules.map((module, index) => (

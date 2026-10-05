@@ -16,7 +16,7 @@ from code_genome_ml import (
     file_document,
     train_all,
 )
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..ids import new_id
@@ -26,11 +26,13 @@ from ..models import (
     FileManifestEntry,
     GraphEdge,
     GraphNode,
+    KnowledgeChunkRecord,
     MlModelRun,
     ModuleCandidate,
     RepositoryCommit,
     RepositorySnapshot,
 )
+from .knowledge import document_text
 
 logger = logging.getLogger(__name__)
 MAX_STORED_PREDICTIONS = 500
@@ -182,7 +184,8 @@ def trained_result(db: Session, snapshot: RepositorySnapshot, task: str) -> dict
 
 
 def search_documents(db: Session, snapshot: RepositorySnapshot) -> list[SearchDocument]:
-    """Everything a question can be answered from: files, modules, hotspots, commits."""
+    """Everything a question can be answered from: files, modules, hotspots, commits, and
+    cited excerpts of docs, manifests, and source."""
     inputs = training_inputs(db, snapshot)
     documents = [file_document(record) for record in inputs.files]
     for module in db.scalars(
@@ -229,11 +232,49 @@ def search_documents(db: Session, snapshot: RepositorySnapshot) -> list[SearchDo
                 title=commit.message.splitlines()[0][:160] if commit.message else commit.sha[:12],
             )
         )
+    for chunk in db.scalars(
+        select(KnowledgeChunkRecord)
+        .where(
+            KnowledgeChunkRecord.snapshot_id == snapshot.id,
+            KnowledgeChunkRecord.workspace_id == snapshot.workspace_id,
+        )
+        .order_by(KnowledgeChunkRecord.path, KnowledgeChunkRecord.ordinal)
+    ):
+        documents.append(
+            SearchDocument(
+                id=f"evidence:{chunk.provenance_id}",
+                kind="code" if chunk.kind == "source" else "doc",
+                text=document_text(
+                    chunk.path,
+                    chunk.kind,
+                    chunk.heading,
+                    chunk.start_line,
+                    chunk.end_line,
+                    chunk.text,
+                ),
+                title=f"{chunk.path}" + (f" · {chunk.heading}" if chunk.heading else ""),
+                path=chunk.path,
+            )
+        )
     return documents
 
 
+def knowledge_count(db: Session, snapshot: RepositorySnapshot) -> int:
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(KnowledgeChunkRecord)
+            .where(
+                KnowledgeChunkRecord.snapshot_id == snapshot.id,
+                KnowledgeChunkRecord.workspace_id == snapshot.workspace_id,
+            )
+        )
+        or 0
+    )
+
+
 # Retrievers keyed by (snapshot, workspace, commit); bounded to the 16 most recent.
-_primed: dict[tuple[str, str, str], HybridRetriever] = {}
+_primed: dict[tuple[str, str, str, int], HybridRetriever] = {}
 
 
 def retrieval_mode(db: Session, snapshot: RepositorySnapshot) -> str:
@@ -245,7 +286,8 @@ def retrieval_mode(db: Session, snapshot: RepositorySnapshot) -> str:
 
 def retriever(db: Session, snapshot: RepositorySnapshot) -> HybridRetriever:
     """Hybrid retriever for a snapshot, built once per process and snapshot."""
-    key = (snapshot.id, snapshot.workspace_id, snapshot.commit_sha)
+    # Knowledge can be backfilled into an existing snapshot, so it is part of the key.
+    key = (snapshot.id, snapshot.workspace_id, snapshot.commit_sha, knowledge_count(db, snapshot))
     cached = _primed.get(key)
     if cached is None:
         cached = HybridRetriever(search_documents(db, snapshot))

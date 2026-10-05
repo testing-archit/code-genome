@@ -18,7 +18,15 @@ const suggestions: Record<AnswerLanguage, string[]> = {
   hinglish: ["Recently kya change hua hai?", "Sabse risky files kaunsi hain?", "Billing module kahan hai?"],
 };
 
-type PendingTurn = { question: string } | null;
+type PendingTurn = { question: string; draft: string; model: string | null; replaced: boolean } | null;
+
+/** Hide `[1]`-style citation markers (including a half-received one) in streamed drafts. */
+function cleanDraft(text: string): string {
+  return text
+    .replace(/\s*\[\d{1,2}(?:\s*,\s*\d{1,2})*\]/g, "")
+    .replace(/\s*\[[\d,\s]*$/, "")
+    .replace(/[ \t]+([.,;:!?।])/g, "$1");
+}
 
 export default function AskPage() {
   return (
@@ -104,7 +112,7 @@ function Chat() {
       const question = text.trim();
       if (question.length < 2 || pending) return;
       setError(null);
-      setPending({ question });
+      setPending({ question, draft: "", model: null, replaced: false });
       setDraft("");
       try {
         let conversationId = activeId;
@@ -116,7 +124,11 @@ function Chat() {
           setThreads((current) => [created, ...(current ?? [])]);
           setActiveIdState(created.id);
         }
-        const turn = await api.sendMessage(conversationId, question, language);
+        const turn = await api.streamMessage(conversationId, question, language, {
+          onStatus: (model) => setPending((current) => (current ? { ...current, model } : current)),
+          onDelta: (text) => setPending((current) => (current ? { ...current, draft: current.draft + text } : current)),
+          onFallback: () => setPending((current) => (current ? { ...current, draft: "", replaced: true } : current)),
+        });
         setMessages((current) => [...current, turn.user_message, turn.assistant_message]);
         setThreads((current) => [turn.conversation, ...(current ?? []).filter((item) => item.id !== turn.conversation.id)]);
       } catch (caught) {
@@ -214,9 +226,20 @@ function Chat() {
           {pending && (
             <>
               <div className="msg msg-user"><div className="msg-body">{pending.question}</div></div>
-              <div className="msg msg-assistant">
-                <div className="msg-who"><i><HelixMark size={12} /></i>Searching repository evidence</div>
-                <span className="typing" aria-label="Answer in progress"><i /><i /><i /></span>
+              <div className="msg msg-assistant" aria-busy="true">
+                <div className="msg-who">
+                  <i><HelixMark size={12} /></i>
+                  {pending.replaced
+                    ? "Draft failed citation checks, showing the extractive answer"
+                    : pending.model
+                      ? `${pending.model} is writing · checking citations when done`
+                      : "Searching repository evidence"}
+                </div>
+                {pending.draft ? (
+                  <div className="msg-body" aria-live="polite">{cleanDraft(pending.draft)}</div>
+                ) : (
+                  <span className="typing" aria-label="Answer in progress"><i /><i /><i /></span>
+                )}
               </div>
             </>
           )}

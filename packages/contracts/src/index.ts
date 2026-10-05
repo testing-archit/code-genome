@@ -419,3 +419,105 @@ export type SearchResults = {
   message: string | null;
   limitations: string[];
 };
+
+export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "listed";
+
+export type ChangeImpact = {
+  repository_id: string;
+  snapshot_id: string;
+  snapshot_sha: string;
+  analysis_version: string;
+  generated_at: string;
+  summary: {
+    changed_files: number;
+    changed_in_snapshot: number;
+    impacted_files: number;
+    modules_touched: number;
+    max_risk: number | null;
+    high_risk_files: number;
+  };
+  changed: Array<{
+    path: string;
+    change: ChangeKind;
+    previous_path: string | null;
+    additions: number;
+    deletions: number;
+    in_snapshot: boolean;
+    risk_score: number | null;
+    risk_rationale: string | null;
+    risk_model: string | null;
+    modules: string[];
+    evidence_ids: string[];
+  }>;
+  impacted: Array<{
+    path: string;
+    score: number;
+    reasons: string[];
+    evidence_ids: string[];
+    via: string[];
+    modules: string[];
+  }>;
+  modules: Array<{ name: string; changed_files: number; impacted_files: number; inferred: boolean }>;
+  limitations: string[];
+};
+
+export type SnapshotSummary = {
+  id: string;
+  commit_sha: string;
+  tree_sha: string;
+  analysis_version: string;
+  run_id: string;
+  refs: string[];
+  published_at: string;
+};
+
+export type ComparedFile = {
+  path: string;
+  base_blob_sha: string | null;
+  head_blob_sha: string | null;
+  size_delta: number;
+};
+
+export type ComparedImport = { source: string; target: string; evidence_id: string };
+
+export type SnapshotComparison = {
+  repository_id: string;
+  base: SnapshotSummary;
+  head: SnapshotSummary;
+  generated_at: string;
+  unavailable: Array<"files" | "imports" | "modules" | "hotspots">;
+  counts: {
+    files_added: number;
+    files_removed: number;
+    files_modified: number;
+    imports_added: number;
+    imports_removed: number;
+    modules_changed: number;
+  };
+  files_added: ComparedFile[];
+  files_removed: ComparedFile[];
+  files_modified: ComparedFile[];
+  imports_added: ComparedImport[];
+  imports_removed: ComparedImport[];
+  modules: Array<{
+    name: string;
+    status: "added" | "removed" | "changed";
+    added_files: string[];
+    removed_files: string[];
+    inferred: boolean;
+  }>;
+  hotspots: Array<{ path: string; base_score: number | null; head_score: number | null; delta: number }>;
+  limitations: string[];
+};
+
+export type ExportKind = "architecture" | "risk" | "comparison";
+export type ExportFormat = "md" | "json";
+
+export type RepositoryAutomation = {
+  repository_id: string;
+  auto_analyze: boolean;
+  branch: string;
+  webhook_configured: boolean;
+  webhook_path: string;
+  events: string[];
+};

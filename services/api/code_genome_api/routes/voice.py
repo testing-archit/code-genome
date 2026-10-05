@@ -8,6 +8,7 @@ from ..config import get_settings
 from ..errors import AppError
 from ..ids import new_id
 from ..schemas import VoiceSessionCreate, VoiceSessionResponse
+from ..services.brief import repository_brief
 from ..services.gemini import GeminiProviderError
 from ..services.gemini_live import CONSTRAINED_WEBSOCKET_URL, create_live_session
 from .intelligence import _repository, _snapshot
@@ -41,6 +42,7 @@ def create_voice_session(
             language=payload.language,
             repository_name=repository.external_id,
             snapshot_sha=snapshot.commit_sha,
+            brief=repository_brief(db, snapshot, repository.external_id),
             timeout_seconds=settings.gemini_timeout_seconds,
             ttl_minutes=settings.gemini_live_session_minutes,
         )

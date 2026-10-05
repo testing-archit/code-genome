@@ -3,7 +3,7 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -396,6 +396,43 @@ class GitRepository:
                 )
             )
         return tuple(commits)
+
+    def read_blobs(
+        self,
+        entries: Sequence[RepositoryManifestFile],
+        *,
+        max_file_bytes: int = 400_000,
+        max_total_bytes: int = 20_000_000,
+    ) -> tuple[RepositorySourceFile, ...]:
+        """Read pinned blobs by manifest entry, skipping oversized files and stopping at the
+        total byte budget. Symlinks are never followed."""
+        if max_file_bytes < 1 or max_total_bytes < 1:
+            raise ValueError("Blob limits must be positive")
+        files: list[RepositorySourceFile] = []
+        total = 0
+        for entry in sorted(entries, key=lambda item: item.path):
+            if entry.mode == "120000" or entry.size > max_file_bytes:
+                continue
+            if not OBJECT_ID_PATTERN.fullmatch(entry.blob_sha):
+                raise GitOperationError("Manifest entry has an invalid blob object ID.")
+            if total + entry.size > max_total_bytes:
+                break
+            content = self._run(
+                ["cat-file", "blob", entry.blob_sha], max_output_bytes=max_file_bytes
+            )
+            if len(content) != entry.size:
+                raise GitOperationError("Git blob size did not match the pinned tree manifest.")
+            total += entry.size
+            files.append(
+                RepositorySourceFile(
+                    path=entry.path,
+                    blob_sha=entry.blob_sha,
+                    mode=entry.mode,
+                    size=entry.size,
+                    content=content,
+                )
+            )
+        return tuple(files)
 
     def read_source_snapshot(
         self,

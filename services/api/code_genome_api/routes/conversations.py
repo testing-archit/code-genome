@@ -1,11 +1,20 @@
+import json
+import logging
+from collections.abc import Iterator
+from datetime import timedelta
+
+from code_genome_ml import RETRIEVAL_VERSION
 from fastapi import APIRouter, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from ..audit import record_audit_event
 from ..auth import Actor, Database
+from ..config import get_settings
 from ..errors import AppError
 from ..ids import new_id
-from ..models import ChatConversation, ChatMessage, GroundedAnswer, utc_now
+from ..models import ChatConversation, ChatMessage, GroundedAnswer, RepositorySnapshot, utc_now
 from ..schemas import (
     ConversationCreate,
     ConversationMessageCreate,
@@ -14,11 +23,21 @@ from ..schemas import (
     ConversationSummaryResponse,
     ConversationTurnResponse,
 )
-from ..services.gemini import ConversationTurn
-from ..services.grounding import produce_grounded_answer
+from ..services.gemini import (
+    ConversationTurn,
+    GeminiProviderError,
+    finalize_streamed_answer,
+    stream_grounded_answer,
+)
+from ..services.grounding import (
+    plan_grounded_answer,
+    produce_grounded_answer,
+    record_grounded_answer,
+)
 from .intelligence import _repository, _snapshot, grounded_answer_response
 
 router = APIRouter(tags=["conversations"])
+logger = logging.getLogger(__name__)
 MAX_MESSAGES_PER_CONVERSATION = 400
 
 
@@ -255,3 +274,164 @@ def delete_conversation(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _sse(event: str, data: object) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+
+@router.post("/conversations/{conversation_id}/messages/stream")
+def stream_conversation_message(
+    conversation_id: str,
+    payload: ConversationMessageCreate,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> StreamingResponse:
+    """Answer a follow-up as server-sent events while Gemini writes it.
+
+    Events: ``status`` (stage), ``delta`` (draft text), ``fallback`` (the draft failed
+    citation checks and is replaced), ``done`` (the persisted ConversationTurn), and
+    ``error``. Draft text is unverified; only the ``done`` answer is authoritative. Nothing
+    is stored unless the stream completes.
+    """
+    conversation = _conversation(db, conversation_id, actor)
+    _repository(db, conversation.repository_id, actor)
+    snapshot = _snapshot(db, conversation.repository_id, actor)
+    if _message_count(db, conversation.id) >= MAX_MESSAGES_PER_CONVERSATION:
+        raise AppError(
+            409,
+            "CONVERSATION_FULL",
+            "Conversation is full",
+            "Start a new conversation to continue asking questions.",
+        )
+    previous = list(
+        db.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conversation.id)
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(6)
+        )
+    )
+    history = tuple(ConversationTurn(item.role, item.content) for item in reversed(previous))
+    question = payload.content.strip()
+    plan = plan_grounded_answer(
+        db,
+        repository_id=conversation.repository_id,
+        snapshot=snapshot,
+        question=question,
+        history=history,
+    )
+    settings = get_settings()
+    api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
+    bind = db.get_bind()
+    request_id = request.state.request_id
+    workspace_id, user_id = actor.workspace_id, actor.user_id
+    conversation_ref, snapshot_ref = conversation.id, snapshot.id
+    first_turn = not previous
+
+    def events() -> Iterator[bytes]:
+        result = plan.extractive
+        retrieval_version = RETRIEVAL_VERSION
+        if plan.can_phrase:
+            yield _sse("status", {"stage": "writing", "model": settings.gemini_model})
+            draft: list[str] = []
+            try:
+                for piece in stream_grounded_answer(
+                    api_key=api_key,
+                    model=settings.gemini_model,
+                    question=question,
+                    documents=plan.documents,
+                    timeout_seconds=settings.gemini_timeout_seconds,
+                    max_output_tokens=settings.gemini_max_output_tokens,
+                    history=history,
+                    language=payload.language,
+                ):
+                    draft.append(piece)
+                    yield _sse("delta", {"text": piece})
+                result = finalize_streamed_answer("".join(draft), plan.documents)
+                retrieval_version = f"{RETRIEVAL_VERSION}+gemini:{settings.gemini_model}"
+                if not result.evidence_ids and plan.routed:
+                    result, retrieval_version = plan.extractive, RETRIEVAL_VERSION
+                    yield _sse("fallback", {"reason": "Showing the deterministic answer."})
+            except GeminiProviderError as error:
+                logger.warning(
+                    "gemini_stream_fallback",
+                    extra={"conversation_id": conversation_ref, "reason": str(error)},
+                )
+                result = plan.extractive
+                if draft:
+                    yield _sse(
+                        "fallback",
+                        {"reason": "The draft could not be verified against its citations."},
+                    )
+        try:
+            with Session(bind, expire_on_commit=False) as session:
+                stored_snapshot = session.get(RepositorySnapshot, snapshot_ref)
+                stored_conversation = session.get(ChatConversation, conversation_ref)
+                if stored_snapshot is None or stored_conversation is None:
+                    yield _sse("error", {"code": "NOT_FOUND", "detail": "Conversation is gone."})
+                    return
+                user_message = ChatMessage(
+                    id=new_id("msg"),
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_ref,
+                    role="user",
+                    channel=payload.channel,
+                    content=question,
+                )
+                session.add(user_message)
+                answer = record_grounded_answer(
+                    session,
+                    plan=plan,
+                    result=result,
+                    retrieval_version=retrieval_version,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    repository_id=stored_conversation.repository_id,
+                    snapshot=stored_snapshot,
+                    question=question,
+                    request_id=request_id,
+                    channel=payload.channel,
+                    language=payload.language,
+                )
+                assistant_message = ChatMessage(
+                    id=new_id("msg"),
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_ref,
+                    role="assistant",
+                    channel=payload.channel,
+                    content=answer.answer,
+                    answer_id=answer.id,
+                )
+                session.add(assistant_message)
+                if first_turn and stored_conversation.title == "New conversation":
+                    stored_conversation.title = question[:80] + ("…" if len(question) > 80 else "")
+                stored_conversation.updated_at = utc_now()
+                # Messages are listed by creation time, so the answer must sort after
+                # the question even when both are written in the same instant.
+                user_message.created_at = stored_conversation.updated_at
+                assistant_message.created_at = stored_conversation.updated_at + timedelta(
+                    microseconds=1
+                )
+                session.commit()
+                answers = {answer.id: answer}
+                turn = ConversationTurnResponse(
+                    conversation=_summary(session, stored_conversation),
+                    user_message=_message_response(user_message, answers),
+                    assistant_message=_message_response(assistant_message, answers),
+                )
+            yield _sse("done", turn.model_dump(mode="json"))
+        except Exception:  # noqa: BLE001 - the stream must end with an event, not a reset
+            logger.exception(
+                "conversation_stream_failed", extra={"conversation_id": conversation_ref}
+            )
+            yield _sse(
+                "error", {"code": "STREAM_FAILED", "detail": "The answer could not be saved."}
+            )
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

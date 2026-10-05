@@ -1,13 +1,13 @@
 "use client";
 
-import type { RepositoryConnection } from "@code-genome/contracts";
+import type { RepositoryAutomation, RepositoryConnection } from "@code-genome/contracts";
 import { FormEvent, useEffect, useState } from "react";
 
 import { LockIcon } from "../../../../components/icons";
 import { useRepo } from "../../../../components/repo-context";
 import { Loading, Notice, Panel } from "../../../../components/ui";
 import { useWorkspace } from "../../../../components/workspace";
-import { api, errorMessage } from "../../../../lib/api";
+import { api, apiUrl, errorMessage } from "../../../../lib/api";
 import { formatTime } from "../../../../lib/format";
 
 export default function SettingsPage() {
@@ -91,6 +91,8 @@ export default function SettingsPage() {
           </div>
         )}
       </Panel>
+      <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
+      <AutomationPanel repositoryId={repository.id} />
       <Panel title="How the token is handled">
         <ul className="small" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 8 }}>
           <li>Encrypted with AES-256-GCM, bound to this workspace and repository.</li>
@@ -99,6 +101,70 @@ export default function SettingsPage() {
           <li>Repository <code>{repository.external_id}</code>, branch <code>{repository.default_branch}</code>, ID <code>{repository.id}</code>.</li>
         </ul>
       </Panel>
+      </div>
     </div>
+  );
+}
+
+function AutomationPanel({ repositoryId }: { repositoryId: string }) {
+  const { toast } = useWorkspace();
+  const [automation, setAutomation] = useState<RepositoryAutomation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getAutomation(repositoryId)
+      .then((value) => {
+        if (active) setAutomation(value);
+      })
+      .catch((caught: unknown) => {
+        if (active) setError(errorMessage(caught, "Automation settings could not be loaded."));
+      });
+    return () => {
+      active = false;
+    };
+  }, [repositoryId]);
+
+  async function toggle(next: boolean) {
+    setSaving(true);
+    setError(null);
+    try {
+      setAutomation(await api.putAutomation(repositoryId, next));
+      toast(next ? "Pushes will now queue an analysis" : "Automatic analysis turned off");
+    } catch (caught) {
+      setError(errorMessage(caught, "The setting could not be saved."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const endpoint = automation ? `${apiUrl.replace(/\/api\/v1\/?$/, "")}${automation.webhook_path}` : "";
+
+  return (
+    <Panel title="Automatic analysis" description="Re-analyze when GitHub reports a push to the tracked branch. Owners and admins can change it.">
+      {!automation ? (error ? <Notice tone="error">{error}</Notice> : <Loading rows={2} />) : (
+        <div style={{ display: "grid", gap: 14 }}>
+          <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: saving ? "wait" : "pointer" }}>
+            <input checked={automation.auto_analyze} disabled={saving} onChange={(event) => void toggle(event.target.checked)} type="checkbox" />
+            <span>Analyze each push to <code>{automation.branch}</code></span>
+          </label>
+          {error && <Notice tone="error">{error}</Notice>}
+          {!automation.webhook_configured && (
+            <Notice tone="warn" title="Webhook secret not set">
+              The API rejects deliveries until <code>CODE_GENOME_GITHUB_WEBHOOK_SECRET</code> is configured on the server.
+            </Notice>
+          )}
+          <dl className="kv">
+            <dt>Payload URL</dt><dd><code style={{ overflowWrap: "anywhere" }}>{endpoint}</code></dd>
+            <dt>Content type</dt><dd><code>application/json</code></dd>
+            <dt>Events</dt><dd>{automation.events.join(", ")}</dd>
+            <dt>Secret</dt><dd>Same value as <code>CODE_GENOME_GITHUB_WEBHOOK_SECRET</code></dd>
+          </dl>
+          <p className="muted small">Signatures are verified and each delivery ID is accepted once. Pushes that arrive while an analysis is running are folded into it. GitHub must be able to reach this URL, so local development needs a tunnel.</p>
+        </div>
+      )}
+    </Panel>
   );
 }

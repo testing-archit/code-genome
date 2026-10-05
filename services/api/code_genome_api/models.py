@@ -45,6 +45,7 @@ class Repository(Base):
     clone_url: Mapped[str] = mapped_column(String(500))
     default_branch: Mapped[str] = mapped_column(String(255), default="main")
     status: Mapped[str] = mapped_column(String(32), default="REGISTERED")
+    auto_analyze: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     analyses: Mapped[list["AnalysisRun"]] = relationship(back_populates="repository")
@@ -573,3 +574,53 @@ class MlModelRun(Base):
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     trained_by: Mapped[str] = mapped_column(String(120))
     trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WebhookDelivery(Base):
+    """Provider delivery IDs already processed, kept for replay protection.
+
+    Deliveries are provider-scoped, not tenant-scoped: they hold no repository content and
+    no workspace identifiers. Runs they queue are audited inside each owning workspace.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (UniqueConstraint("provider", "delivery_id", name="uq_webhook_delivery"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    delivery_id: Mapped[str] = mapped_column(String(80))
+    event: Mapped[str] = mapped_column(String(64))
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    outcome: Mapped[str] = mapped_column(String(32))
+    queued_runs: Mapped[int] = mapped_column(Integer, default=0)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class KnowledgeChunkRecord(Base):
+    """A verbatim, redacted excerpt of a doc, manifest, or source file at a snapshot."""
+
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "path", "ordinal", name="uq_snapshot_knowledge_chunk"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    provenance_id: Mapped[str] = mapped_column(ForeignKey("provenance.id", ondelete="CASCADE"))
+    path: Mapped[str] = mapped_column(String(1000))
+    blob_sha: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    heading: Mapped[str] = mapped_column(String(200), default="")
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    analysis_version: Mapped[str] = mapped_column(String(80))
