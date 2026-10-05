@@ -306,7 +306,7 @@ def get_repository_inventory(
     db: Database,
     actor: Actor,
     commit_limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    file_limit: Annotated[int, Query(ge=1, le=2_000)] = 500,
+    file_limit: Annotated[int, Query(ge=1, le=10_000)] = 500,
 ) -> RepositoryInventoryResponse:
     _repository_for_actor(db, repository_id, actor)
     snapshot = db.scalar(

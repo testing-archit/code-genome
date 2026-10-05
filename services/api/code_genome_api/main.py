@@ -21,6 +21,7 @@ from .routes import (
     exports,
     graph,
     health,
+    insights,
     intelligence,
     ml,
     operations,
@@ -134,6 +135,7 @@ app.include_router(architecture.router, prefix="/api/v1")
 app.include_router(delivery_reports.router, prefix="/api/v1")
 app.include_router(intelligence.router, prefix="/api/v1")
 app.include_router(changes.router, prefix="/api/v1")
+app.include_router(insights.router, prefix="/api/v1")
 app.include_router(snapshots.router, prefix="/api/v1")
 app.include_router(exports.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")

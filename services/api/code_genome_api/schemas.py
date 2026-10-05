@@ -634,3 +634,107 @@ class WebhookResultResponse(BaseModel):
     outcome: Literal["queued", "coalesced", "ignored", "duplicate", "pong"]
     queued_run_ids: list[str]
     detail: str
+
+
+class HealthComponentResponse(BaseModel):
+    key: str
+    label: str
+    score: float
+    maximum: float
+    value: str
+    detail: str
+
+
+class RepositoryHealthResponse(BaseModel):
+    score: int
+    band: Literal["Healthy", "Moderate", "At risk"]
+    version: str
+    components: list[HealthComponentResponse]
+
+
+class OverviewCounts(BaseModel):
+    files: int
+    source_files: int
+    commits: int
+    contributors: int
+    modules: int
+    internal_imports: int
+    external_packages: int
+    documents: int
+
+
+class ModuleRiskResponse(BaseModel):
+    name: str
+    risk: float
+    files: int
+    riskiest: list[str]
+    inferred: bool
+
+
+class OverviewFileRisk(BaseModel):
+    path: str
+    score: float
+    rationale: str
+    evidence_ids: list[str]
+
+
+class ContributorResponse(BaseModel):
+    name: str
+    commits: int
+
+
+class RepositoryOverviewResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    analysis_version: str
+    summary: str | None
+    summary_evidence_id: str | None
+    health: RepositoryHealthResponse
+    counts: OverviewCounts
+    high_risk_modules: list[ModuleRiskResponse]
+    riskiest_files: list[OverviewFileRisk]
+    contributors: list[ContributorResponse]
+    risk_model: str
+    limitations: list[str]
+
+
+class ModuleNodeResponse(BaseModel):
+    name: str
+    files: int
+    risk: float | None
+    fan_in: int
+    fan_out: int
+    externals: list[str]
+    inferred: bool
+    description: str
+    riskiest: list[str]
+
+
+class ModuleLinkResponse(BaseModel):
+    source: str
+    target: str
+    imports: int
+    co_changes: int
+    evidence_ids: list[str]
+
+
+class ModuleGraphResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    nodes: list[ModuleNodeResponse]
+    links: list[ModuleLinkResponse]
+    limitations: list[str]
+
+
+class GeneratedDocumentResponse(BaseModel):
+    name: str
+    description: str
+    markdown: str
+
+
+class GeneratedDocumentsResponse(BaseModel):
+    repository_id: str
+    snapshot_sha: str
+    version: str
+    generated_at: datetime
+    documents: list[GeneratedDocumentResponse]
