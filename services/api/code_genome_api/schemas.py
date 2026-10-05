@@ -1,4 +1,5 @@
-from datetime import date, datetime
+import re
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -54,9 +55,31 @@ class AnalysisState(StrEnum):
     FAILED = "FAILED"
 
 
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+
+
 class AnalysisCreate(BaseModel):
     refs: list[str] = Field(default_factory=list, max_length=1)
     simulate_failure: bool = False
+    # Analyse a past point of the branch instead of its head: a full commit SHA, or a date
+    # (YYYY-MM-DD, UTC end of day) meaning the newest commit on or before it.
+    as_of: str | None = Field(default=None, max_length=64)
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().lower()
+        if _FULL_SHA.fullmatch(value):
+            return value
+        try:
+            day = date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("as_of must be a full commit SHA or a YYYY-MM-DD date") from error
+        if day > datetime.now(UTC).date():
+            raise ValueError("as_of cannot be in the future")
+        return day.isoformat()
 
     @field_validator("refs")
     @classmethod
@@ -84,6 +107,7 @@ class AnalysisResponse(BaseModel):
     completed_at: datetime | None
     error_code: str | None
     error_detail: str | None
+    as_of: str | None = None
     # Live pipeline stage (e.g. "fetching", "mining_history", "tracing_bugs", "parsing",
     # "publishing", "complete") and counts: files_indexed, source_files, files_parsed,
     # commits_mined, dependencies_mapped, modules_discovered, knowledge_chunks,
@@ -596,6 +620,8 @@ class SnapshotSummaryResponse(BaseModel):
     run_id: str
     refs: list[str]
     published_at: datetime
+    # Set when the snapshot is of a past point (as requested), not the branch head.
+    as_of: str | None = None
 
 
 class ComparedFileResponse(BaseModel):

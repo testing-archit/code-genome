@@ -36,6 +36,7 @@ def get_architecture(
             RepositorySnapshot.repository_id == repository_id,
             RepositorySnapshot.workspace_id == actor.workspace_id,
             RepositorySnapshot.published_at.is_not(None),
+            RepositorySnapshot.as_of.is_(None),
         )
         .order_by(RepositorySnapshot.published_at.desc())
         .limit(1)

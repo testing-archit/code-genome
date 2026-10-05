@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
@@ -328,9 +329,31 @@ class GitRepository:
             raise GitOperationError("Existing mirror does not match the registered repository.")
 
     def resolve_ref(self, ref: str) -> str:
+        """A branch name, or a full commit ID that must already be in the mirror."""
+        if OBJECT_ID_PATTERN.fullmatch(ref):
+            result = self._run(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+            object_id = result.decode().strip().lower()
+            if object_id != ref:
+                raise GitOperationError("The commit is not in the fetched history.")
+            return object_id
         validated = validate_ref(ref)
         result = self._run(["rev-parse", "--verify", f"refs/heads/{validated}^{{commit}}"])
         object_id = result.decode().strip().lower()
+        if not OBJECT_ID_PATTERN.fullmatch(object_id):
+            raise GitOperationError("Git returned an invalid commit object ID.")
+        return object_id
+
+    def commit_before(self, branch: str, before: datetime) -> str | None:
+        """The newest commit on ``branch`` committed at or before ``before`` (UTC), if fetched."""
+        validated = validate_ref(branch)
+        stamp = before.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        output = self._run(
+            ["rev-list", "-1", f"--before={stamp}", f"refs/heads/{validated}"],
+            max_output_bytes=200,
+        )
+        object_id = output.decode().strip().lower()
+        if not object_id:
+            return None
         if not OBJECT_ID_PATTERN.fullmatch(object_id):
             raise GitOperationError("Git returned an invalid commit object ID.")
         return object_id

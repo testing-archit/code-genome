@@ -24,6 +24,8 @@ export type AnalysisRun = {
   completed_at: string | null;
   error_code: string | null;
   error_detail: string | null;
+  /** Set when the run analysed a past point (full commit SHA or YYYY-MM-DD), not the head. */
+  as_of?: string | null;
 };
 
 export type ProblemDetail = {
@@ -475,6 +477,8 @@ export type SnapshotSummary = {
   run_id: string;
   refs: string[];
   published_at: string;
+  /** Set for a snapshot of a past point rather than the branch head. */
+  as_of?: string | null;
 };
 
 export type ComparedFile = {

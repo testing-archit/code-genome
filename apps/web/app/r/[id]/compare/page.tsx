@@ -1,13 +1,14 @@
 "use client";
 
 import type { ComparedFile, ComparedImport, SnapshotComparison, SnapshotSummary } from "@code-genome/contracts";
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 
 import { ExportButtons } from "../../../../components/export-buttons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Notice, Panel } from "../../../../components/ui";
+import { useWorkspace } from "../../../../components/workspace";
 import { formatBytes, formatTime, shortSha } from "../../../../lib/format";
-import { api } from "../../../../lib/api";
+import { api, errorMessage } from "../../../../lib/api";
 import { useResource } from "../../../../lib/use-resource";
 
 export default function ComparePage() {
@@ -19,7 +20,50 @@ export default function ComparePage() {
 }
 
 function snapshotLabel(item: SnapshotSummary): string {
-  return `${shortSha(item.commit_sha)} · ${item.refs.join(", ") || "no ref"} · ${formatTime(item.published_at)}`;
+  const point = item.as_of ? `as of ${item.as_of.length === 40 ? shortSha(item.as_of) : item.as_of}` : "branch head";
+  return `${shortSha(item.commit_sha)} · ${item.refs.join(", ") || "no ref"} · ${point} · analysed ${formatTime(item.published_at)}`;
+}
+
+/** Branch-head snapshots first (newest analysis first), then past points (latest point first). */
+function ordered(items: SnapshotSummary[]): SnapshotSummary[] {
+  const heads = items.filter((item) => !item.as_of);
+  const past = items.filter((item) => item.as_of).sort((a, b) => (b.as_of ?? "").localeCompare(a.as_of ?? ""));
+  return [...heads, ...past];
+}
+
+function PastPointForm() {
+  const { repository, runs, retryRuns } = useRepo();
+  const { toast } = useWorkspace();
+  const [day, setDay] = useState("");
+  const [busy, setBusy] = useState(false);
+  const running = runs.some((run) => run.state === "QUEUED" || run.state === "RUNNING");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!day) return;
+    setBusy(true);
+    try {
+      await api.createAnalysis(repository.id, repository.default_branch, day);
+      toast(`Analysing ${repository.default_branch} as of ${day}.`);
+      retryRuns();
+    } catch (caught) {
+      toast(errorMessage(caught, "The past snapshot could not be queued."));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <form className="row" onSubmit={submit} style={{ gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+      <label className="field" style={{ minWidth: 200 }}>
+        Analyse {repository.default_branch} as of
+        <input className="input" max={today} onChange={(event) => setDay(event.target.value)} required type="date" value={day} />
+      </label>
+      <button className="button button-secondary" disabled={busy || running || !day} type="submit">
+        {busy ? "Queuing…" : running ? "Analysis running…" : "Add past snapshot"}
+      </button>
+      <span className="muted small">Uses the newest commit on or before that day (UTC) within the fetched history. Current views keep showing the branch head.</span>
+    </form>
+  );
 }
 
 function CompareView() {
@@ -27,7 +71,7 @@ function CompareView() {
   const snapshots = useResource(`${repository.id}:snapshots:${published?.snapshot_sha ?? ""}`, () => api.listSnapshots(repository.id));
   const [base, setBase] = useState<string | null>(null);
   const [head, setHead] = useState<string | null>(null);
-  const items = snapshots.data ?? [];
+  const items = ordered(snapshots.data ?? []);
   const headSha = head ?? items[0]?.commit_sha ?? null;
   const baseSha = base ?? items[1]?.commit_sha ?? null;
   const ready = Boolean(baseSha && headSha && baseSha !== headSha);
@@ -40,8 +84,8 @@ function CompareView() {
   if (items.length < 2) {
     return (
       <Panel>
-        <Empty centered title="One snapshot so far">
-          Comparison needs two published snapshots. Analyze again after new commits land, or turn on automatic analysis in Settings so each push publishes one.
+        <Empty centered title="One snapshot so far" action={<PastPointForm />}>
+          Comparison needs two published snapshots. Analyse the branch as it was on an earlier day, analyse again after new commits land, or turn on automatic analysis in Settings.
         </Empty>
       </Panel>
     );
@@ -69,6 +113,7 @@ function CompareView() {
           </label>
         </div>
         {!ready && <div style={{ marginTop: 12 }}><Notice tone="warn">Choose two different snapshots.</Notice></div>}
+        <div style={{ marginTop: 14 }}><PastPointForm /></div>
       </Panel>
 
       {comparison.error ? <Notice tone="error" title="Comparison failed">{comparison.error}</Notice> : comparison.loading || !comparison.data ? (ready ? <Panel><Loading rows={5} /></Panel> : null) : <ComparisonResult data={comparison.data} />}

@@ -2,11 +2,12 @@ import fcntl
 import hashlib
 import logging
 import os
+import re
 import shutil
 from collections import Counter
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Protocol
 
@@ -170,6 +171,35 @@ def delete_repository_mirror(workspace_id: str, repository_id: str) -> bool:
     with suppress(OSError):
         target.parent.rmdir()
     return True
+
+
+class AnalysisTargetError(Exception):
+    """The requested past point is not in the fetched history. Messages are built only from
+    validated values (hex SHA, ISO date, branch name), so they are safe to show."""
+
+
+def _resolve_target(git_repository: GitRepository, branch: str, as_of: str | None) -> str:
+    """The commit to analyse: the branch head, a requested SHA, or the newest commit on the
+    branch at the end of a requested UTC day. Fails clearly when it is not in the mirror."""
+    if as_of is None:
+        return branch
+    depth = get_settings().clone_depth
+    if re.fullmatch(r"[0-9a-f]{40}", as_of):
+        try:
+            return git_repository.resolve_ref(as_of)
+        except GitOperationError as error:
+            raise AnalysisTargetError(
+                f"Commit {as_of[:12]} is not in the fetched history of {branch} "
+                f"(the newest {depth} commits)."
+            ) from error
+    end_of_day = datetime.combine(date.fromisoformat(as_of), time.max, tzinfo=UTC)
+    commit = git_repository.commit_before(branch, end_of_day)
+    if commit is None:
+        raise AnalysisTargetError(
+            f"No commit on {branch} on or before {as_of} is within the fetched history "
+            f"(the newest {depth} commits)."
+        )
+    return commit
 
 
 def _load_git_credential(
@@ -531,6 +561,7 @@ def _persist_graph(
         run_id=run.id,
         analysis_version=graph.analysis_version,
         published_at=None,
+        as_of=run.as_of,
     )
     db.add(snapshot)
     db.flush()
@@ -752,6 +783,7 @@ def run_structural_analysis(
         workspace_id = repository.workspace_id
         repository_id = repository.id
         branch = run.requested_refs[0] if run.requested_refs else repository.default_branch
+        as_of = run.as_of
         connection = db.scalar(
             select(RepositoryConnection).where(
                 RepositoryConnection.repository_id == repository.id,
@@ -775,8 +807,9 @@ def run_structural_analysis(
             timeout_seconds=settings.clone_timeout_seconds,
             credential=credential,
         )
+        target = _resolve_target(git_repository, branch, as_of)
         source_snapshot = git_repository.read_source_snapshot(
-            branch,
+            target,
             max_files=settings.max_source_files,
             max_manifest_files=settings.max_manifest_files,
             max_file_bytes=settings.max_source_file_bytes,
@@ -796,7 +829,7 @@ def run_structural_analysis(
         )
         refs = git_repository.list_branch_refs()
         commits = git_repository.read_commit_history(
-            branch, max_commits=settings.max_history_commits
+            target, max_commits=settings.max_history_commits
         )
         _set_progress(
             session_factory,
@@ -1005,6 +1038,15 @@ def run_structural_analysis(
             "REPOSITORY_LIMIT_EXCEEDED",
             "Repository source exceeded the configured analysis limits.",
             ["No graph snapshot was published."],
+        )
+    except AnalysisTargetError as error:
+        logger.warning("analysis_target_not_found", extra={"analysis_run_id": run_id})
+        _fail_run(
+            session_factory,
+            run_id,
+            "TARGET_NOT_IN_HISTORY",
+            str(error),
+            ["No graph snapshot was published.", "Pick a later date or commit."],
         )
     except GitOperationError:
         logger.warning("git_operation_failed", extra={"analysis_run_id": run_id})

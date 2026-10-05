@@ -140,11 +140,11 @@ export const api = {
 
   listAnalyses: (repositoryId: string) =>
     request<AnalysisRun[]>(`/repositories/${repositoryId}/analyses`),
-  createAnalysis: (repositoryId: string, branch: string) =>
+  createAnalysis: (repositoryId: string, branch: string, asOf?: string) =>
     request<AnalysisRun>(`/repositories/${repositoryId}/analyses`, {
       method: "POST",
       headers: requestHeaders(crypto.randomUUID()),
-      body: JSON.stringify({ refs: [branch] }),
+      body: JSON.stringify({ refs: [branch], ...(asOf ? { as_of: asOf } : {}) }),
     }),
   getAnalysis: (runId: string) => request<AnalysisRun>(`/analyses/${runId}`),
 

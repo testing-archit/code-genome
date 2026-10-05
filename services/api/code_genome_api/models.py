@@ -133,6 +133,8 @@ class AnalysisRun(Base):
     )
     snapshot_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     requested_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # A past point to analyse instead of the branch head: a full commit SHA or an ISO date.
+    as_of: Mapped[str | None] = mapped_column(String(64), nullable=True)
     version: Mapped[str] = mapped_column(String(80), default="structural-genome@0.1.0")
     state: Mapped[str] = mapped_column(String(24), default="QUEUED", index=True)
     progress: Mapped[float] = mapped_column(Float, default=0)
@@ -172,6 +174,8 @@ class RepositorySnapshot(Base):
     )
     analysis_version: Mapped[str] = mapped_column(String(160))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set for snapshots of a past point; "current" views read only snapshots without it.
+    as_of: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class FileManifestEntry(Base):

@@ -45,6 +45,7 @@ def _summary(db: Database, snapshot: RepositorySnapshot) -> SnapshotSummaryRespo
         run_id=snapshot.run_id,
         refs=list(run.requested_refs) if run else [],
         published_at=snapshot.published_at,
+        as_of=snapshot.as_of,
     )
 
 

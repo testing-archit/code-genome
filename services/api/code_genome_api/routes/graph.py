@@ -72,6 +72,9 @@ def get_graph(
     )
     if snapshot_sha:
         snapshot_query = snapshot_query.where(RepositorySnapshot.commit_sha == snapshot_sha)
+    else:
+        # Without a SHA, "latest" means the branch head, not a past point analysed later.
+        snapshot_query = snapshot_query.where(RepositorySnapshot.as_of.is_(None))
     snapshot = db.scalar(snapshot_query.order_by(RepositorySnapshot.published_at.desc()).limit(1))
     if snapshot is None:
         raise AppError(

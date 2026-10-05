@@ -75,7 +75,8 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
   }, [repositoryId, runsAttempt]);
 
   const latestRun = runs[0] ?? null;
-  const published = runs.find((run) => run.state === "SUCCEEDED" && run.snapshot_sha) ?? null;
+  // Views read the branch head; a past point analysed later is for comparison only.
+  const published = runs.find((run) => run.state === "SUCCEEDED" && run.snapshot_sha && !run.as_of) ?? null;
 
   useEffect(() => {
     setRepositoryState(repositoryId, latestRun?.state);
@@ -97,7 +98,7 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
           setRuns((current) => [updated, ...current.filter((run) => run.id !== updated.id)]);
           if (updated.state === "SUCCEEDED") {
             invalidate(`${repositoryId}:`);
-            toast("Analysis finished. Views now show the new snapshot.");
+            toast(updated.as_of ? `Snapshot as of ${updated.as_of.length === 40 ? updated.as_of.slice(0, 8) : updated.as_of} published. Compare it on Compare snapshots.` : "Analysis finished. Views now show the new snapshot.");
           } else if (updated.state === "FAILED") {
             toast("Analysis failed. See the run details on the overview.");
           }

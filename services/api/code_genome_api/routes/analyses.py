@@ -58,7 +58,9 @@ async def create_analysis(
     repository = _repository_for_actor(db, repository_id, actor)
     refs = payload.refs or [repository.default_branch]
     endpoint = f"POST:/repositories/{repository_id}/analyses"
-    request_fingerprint = fingerprint({"refs": refs, "simulate_failure": payload.simulate_failure})
+    request_fingerprint = fingerprint(
+        {"refs": refs, "simulate_failure": payload.simulate_failure, "as_of": payload.as_of}
+    )
     existing_id = find_idempotent_resource(
         db, actor.workspace_id, endpoint, idempotency_key, request_fingerprint
     )
@@ -77,6 +79,7 @@ async def create_analysis(
         workspace_id=actor.workspace_id,
         repository_id=repository_id,
         requested_refs=refs,
+        as_of=payload.as_of,
         state="QUEUED",
         progress=0,
         version="structural-genome@0.1.0",
