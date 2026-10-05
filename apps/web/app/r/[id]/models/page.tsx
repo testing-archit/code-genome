@@ -657,32 +657,28 @@ function ModuleDiscoverySection({ overview }: { overview: MlOverviewV3 }) {
           { key: "directory", label: `Directory baseline (${metrics.directory_groups ?? "?"} groups)`, scores: metrics.directory_baseline },
         ]}
       />
-      <div className="grid-2 panel-body" style={{ alignItems: "start" }}>
-        <div style={{ display: "grid", gap: 8 }}>
-          <h3>Which signals matter? (ablation)</h3>
-          <p className="small muted">
-            {metrics.ablation_algorithm ? ALGORITHM_NAMES[metrics.ablation_algorithm] : "K-Means"} rerun on growing subsets of the signals. Silhouette and Davies-Bouldin are measured in the four-signal space, which favours the full representation; held-out lift is the neutral yardstick.
-          </p>
-          {metrics.ablation && (
-            <div style={{ margin: "0 -20px" }}>
-              <ScoreTable
-                caption="Same algorithm, different inputs."
-                rows={(Object.keys(ABLATION_NAMES) as AblationVariant[]).map((name) => ({ key: name, label: ABLATION_NAMES[name], scores: metrics.ablation?.[name] }))}
-              />
-            </div>
-          )}
-        </div>
-        <div style={{ display: "grid", gap: 8 }}>
-          <h3>Files in two dimensions</h3>
-          {result.projection && result.projection.length > 0 ? (
-            <>
-              <ClusterScatter modules={result.modules.map((module) => module.name)} points={result.projection} />
-              <p className="small muted">
-                PCA of the four-signal representation{metrics.projection_explained_variance?.length ? ` (explains ${Math.round(metrics.projection_explained_variance.reduce((a, b) => a + b, 0) * 100)}% of variance)` : ""}; colour is the selected clustering. {result.projection.length} files shown. Nearby points are similar by these signals, which is inferred, not proof of a dependency.
-              </p>
-            </>
-          ) : <Empty title="No projection">Too few clustered files to project.</Empty>}
-        </div>
+      <div className="panel-body" style={{ display: "grid", gap: 8, borderTop: "1px solid var(--rule)" }}>
+        <h3>Which signals matter? (ablation)</h3>
+        <p className="small muted">
+          {metrics.ablation_algorithm ? ALGORITHM_NAMES[metrics.ablation_algorithm] : "K-Means"} rerun on growing subsets of the signals. Silhouette and Davies-Bouldin are measured in the four-signal space, which favours the full representation; held-out lift is the neutral yardstick.
+        </p>
+      </div>
+      {metrics.ablation && (
+        <ScoreTable
+          caption="Same algorithm, different inputs."
+          rows={(Object.keys(ABLATION_NAMES) as AblationVariant[]).map((name) => ({ key: name, label: ABLATION_NAMES[name], scores: metrics.ablation?.[name] }))}
+        />
+      )}
+      <div className="panel-body" style={{ display: "grid", gap: 8, borderTop: "1px solid var(--rule)" }}>
+        <h3>Files in two dimensions</h3>
+        {result.projection && result.projection.length > 0 ? (
+          <div className="grid-2" style={{ alignItems: "center" }}>
+            <ClusterScatter modules={result.modules.map((module) => module.name)} points={result.projection} />
+            <p className="small muted">
+              PCA of the four-signal representation{metrics.projection_explained_variance?.length ? ` (explains ${Math.round(metrics.projection_explained_variance.reduce((a, b) => a + b, 0) * 100)}% of variance)` : ""}; colour is the selected clustering. {result.projection.length} files shown. Nearby points are similar by these signals, which is inferred, not proof of a dependency.
+            </p>
+          </div>
+        ) : <Empty title="No projection">Too few clustered files to project.</Empty>}
       </div>
     </Panel>
   );
