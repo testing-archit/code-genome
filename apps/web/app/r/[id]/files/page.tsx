@@ -192,7 +192,7 @@ function FileDetail({ path }: { path: string }) {
         <dl className="kv">
           <dt>Size</dt><dd>{file ? formatBytes(file.size) : "—"}</dd>
           <dt>Blob</dt><dd><code>{shortSha(file?.blob_sha, 12)}</code></dd>
-          <dt>Analyzed</dt><dd>{file?.analyzed ? "Yes, structure extracted" : "No, outside JS/TS scope or limits"}</dd>
+          <dt>Analyzed</dt><dd>{file?.analyzed ? "Yes, structure extracted" : "No, outside the JS/TS and Python scope or limits"}</dd>
           <dt>Module</dt><dd>{owningModule ? <>{owningModule.name} <span className="muted">({Math.round(owningModule.confidence * 100)}% confidence, inferred)</span></> : "None inferred"}</dd>
           <dt>History</dt><dd>{hotspot ? `${hotspot.commit_count} commits, ${hotspot.churn} lines churned` : "No hotspot history recorded"}</dd>
           {analyzed && (

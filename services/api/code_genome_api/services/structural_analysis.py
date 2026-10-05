@@ -825,7 +825,7 @@ def run_structural_analysis(
                 "source_files": len(source_snapshot.files),
             },
             f"Indexed {len(source_snapshot.manifest)} files "
-            f"({len(source_snapshot.files)} JS/TS source files).",
+            f"({len(source_snapshot.files)} JS/TS and Python source files).",
         )
         refs = git_repository.list_branch_refs()
         commits = git_repository.read_commit_history(
@@ -949,7 +949,7 @@ def run_structural_analysis(
             run_id,
             0.5,
             "parsing",
-            message=f"Parsing {len(source_snapshot.files)} JS/TS source files.",
+            message=f"Parsing {len(source_snapshot.files)} JS/TS and Python source files.",
         )
         analyses: list[FileAnalysis] = [
             analyze_source(source_file.path, source_file.content)

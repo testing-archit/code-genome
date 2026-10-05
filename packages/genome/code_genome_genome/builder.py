@@ -2,12 +2,20 @@ import hashlib
 import posixpath
 from pathlib import PurePosixPath
 
-from code_genome_analyzers import CallFact, FileAnalysis, ImportFact, SourceSpan, SymbolFact
+from code_genome_analyzers import (
+    ANALYZER_VERSION,
+    CallFact,
+    FileAnalysis,
+    ImportFact,
+    SourceSpan,
+    SymbolFact,
+)
 
 from .types import EvidenceRef, GenomeDiagnostic, GenomeEdge, GenomeGraph, GenomeNode
 
 GRAPH_BUILDER_VERSION = "structural-genome@0.2.0"
-SOURCE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+SOURCE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi"}
+PythonIndex = dict[str, list[str]]
 CALLABLE_KINDS = {"function", "class", "method"}
 MAX_CALL_EDGES_PER_FILE = 300
 # Call resolution confidence. No type checking happens, so every CALLS edge is a candidate:
@@ -95,7 +103,82 @@ def _import_candidates(source_path: str, specifier: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(candidate) for candidate in candidates))
 
 
-def _resolve_import(source_path: str, item: ImportFact, known_paths: set[str]) -> str | None:
+def python_index(known_paths: set[str]) -> PythonIndex:
+    """Every trailing path of each Python file ("a/b/c.py" -> "c.py", "b/c.py", "a/b/c.py"),
+    so dotted imports resolve wherever the package root sits in the repository."""
+    index: PythonIndex = {}
+    for path in sorted(known_paths):
+        if not path.endswith((".py", ".pyi")):
+            continue
+        parts = path.split("/")
+        for start in range(len(parts)):
+            index.setdefault("/".join(parts[start:]), []).append(path)
+    return index
+
+
+def _python_candidates(source_path: str, module: str) -> tuple[list[str], bool]:
+    """(candidate repository paths or path suffixes, whether they are exact paths)."""
+    dots = len(module) - len(module.lstrip("."))
+    rest = [part for part in module[dots:].split(".") if part]
+    if dots:
+        base = PurePosixPath(source_path).parent
+        for _ in range(dots - 1):
+            if str(base) in {"", "."}:
+                return [], True
+            base = base.parent
+        stem = "/".join([*([str(base)] if str(base) not in {"", "."} else []), *rest])
+        if not rest:
+            return [f"{stem}/__init__.py" if stem else "__init__.py"], True
+        return [f"{stem}.py", f"{stem}.pyi", f"{stem}/__init__.py"], True
+    stem = "/".join(rest)
+    return [f"{stem}.py", f"{stem}.pyi", f"{stem}/__init__.py"], False
+
+
+def _resolve_python(
+    source_path: str, module: str, known_paths: set[str], index: PythonIndex
+) -> str | None:
+    candidates, exact = _python_candidates(source_path, module)
+    for candidate in candidates:
+        if exact:
+            if candidate in known_paths:
+                return candidate
+            continue
+        matches = index.get(candidate, [])
+        if matches:
+            # Prefer the match closest to the importing file, then the shortest path.
+            source_parts = source_path.split("/")
+            return min(
+                matches,
+                key=lambda path: (
+                    -len(posixpath.commonprefix([path.split("/"), source_parts])),
+                    path.count("/"),
+                    path,
+                ),
+            )
+    return None
+
+
+def _resolve_import(
+    source_path: str,
+    item: ImportFact,
+    known_paths: set[str],
+    index: PythonIndex | None = None,
+) -> str | None:
+    if item.kind == "python":
+        resolved = _resolve_python(source_path, item.module, known_paths, index or {})
+        if resolved is None or resolved.endswith("__init__.py"):
+            # `from pkg import module` names a submodule rather than a symbol.
+            for name in item.names:
+                if name != "*":
+                    joined = (
+                        f"{item.module}.{name}"
+                        if not item.module.endswith(".")
+                        else f"{item.module}{name}"
+                    )
+                    submodule = _resolve_python(source_path, joined, known_paths, index or {})
+                    if submodule is not None:
+                        return submodule
+        return resolved
     if not item.module.startswith("."):
         return None
     return next(
@@ -142,18 +225,26 @@ def _import_bindings(
     by_path: dict[str, FileAnalysis],
     known_paths: set[str],
     symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
+    index: PythonIndex | None = None,
 ) -> tuple[dict[str, tuple[str, float]], dict[str, FileAnalysis]]:
-    """Map local identifiers bound by relative ESM imports to exported callable symbols."""
+    """Map local identifiers bound by relative ESM imports or resolved Python imports to
+    exported callable symbols."""
     bindings: dict[str, tuple[str, float]] = {}
     namespaces: dict[str, FileAnalysis] = {}
     for imported in analysis.imports:
-        if imported.kind != "esm":
+        if imported.kind not in {"esm", "python"}:
             continue
-        resolved = _resolve_import(analysis.path, imported, known_paths)
+        resolved = _resolve_import(analysis.path, imported, known_paths, index)
         if resolved is None:
             continue
         target = by_path[resolved]
         for name in imported.names:
+            if imported.kind == "python" and (
+                PurePosixPath(resolved).stem == name or resolved.endswith(f"/{name}/__init__.py")
+            ):
+                # `from pkg import module`: calls look like `module.function()`.
+                namespaces[name] = target
+                continue
             if name.startswith("* as "):
                 namespaces[name.removeprefix("* as ")] = target
                 continue
@@ -208,9 +299,10 @@ def _add_call_edges(
     symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
     edges: dict[str, GenomeEdge],
     evidence: dict[str, EvidenceRef],
+    index: PythonIndex | None = None,
 ) -> None:
     """Emit candidate CALLS edges (caller symbol or file -> callee symbol) with provenance."""
-    bindings, namespaces = _import_bindings(analysis, by_path, known_paths, symbol_facts)
+    bindings, namespaces = _import_bindings(analysis, by_path, known_paths, symbol_facts, index)
     declared = symbol_facts.get(analysis.path, [])
     local_functions = {
         symbol.name: symbol_id
@@ -259,6 +351,7 @@ def build_structural_graph(
         raise ValueError("File analyses must have unique repository paths")
 
     known_paths = {item.path for item in ordered_files}
+    py_index = python_index(known_paths)
     nodes: dict[str, GenomeNode] = {}
     edges: dict[str, GenomeEdge] = {}
     evidence: dict[str, EvidenceRef] = {}
@@ -384,11 +477,12 @@ def build_structural_graph(
                 repository_id, snapshot_sha, analysis, imported.span, "import"
             )
             evidence[imported_evidence.id] = imported_evidence
-            resolved = _resolve_import(analysis.path, imported, known_paths)
+            resolved = _resolve_import(analysis.path, imported, known_paths, py_index)
             if resolved:
                 target_id = file_node_ids[resolved]
             elif (
-                imported.module.startswith(".")
+                imported.kind != "python"  # "..pkg.mod" is a module path, not a file extension
+                and imported.module.startswith(".")
                 and PurePosixPath(imported.module).suffix.lower()
                 and PurePosixPath(imported.module).suffix.lower() not in SOURCE_SUFFIXES
             ):
@@ -422,7 +516,11 @@ def build_structural_graph(
                 )
                 continue
             else:
-                module_key = f"external:{imported.module}"
+                # Python packages group by their top-level name (fastapi.routing -> fastapi).
+                package = (
+                    imported.module.split(".")[0] if imported.kind == "python" else imported.module
+                )
+                module_key = f"external:{package}"
                 target_id = _stable_id("node", repository_id, snapshot_sha, "MODULE", module_key)
                 existing = nodes.get(target_id)
                 evidence_ids = tuple(
@@ -432,7 +530,7 @@ def build_structural_graph(
                     id=target_id,
                     kind="MODULE",
                     natural_key=module_key,
-                    properties={"specifier": imported.module, "external": True},
+                    properties={"specifier": package, "external": True},
                     evidence_ids=evidence_ids,
                 )
             edge_id = _stable_id("edge", repository_id, snapshot_sha, "IMPORTS", file_id, target_id)
@@ -457,9 +555,12 @@ def build_structural_graph(
             symbol_facts,
             edges,
             evidence,
+            py_index,
         )
 
-    extractor_version = ordered_files[0].analyzer_version if ordered_files else "none"
+    # The suite version covers every language analyzer, so a mixed JS/Python snapshot and a
+    # JS-only one compare against the same current version.
+    extractor_version = ANALYZER_VERSION if ordered_files else "none"
     return GenomeGraph(
         repository_id=repository_id,
         repository_sha=snapshot_sha.lower(),

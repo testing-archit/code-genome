@@ -116,3 +116,40 @@ def test_calls_resolve_through_imports_as_candidates_with_provenance() -> None:
     for edge in calls.values():
         assert evidence[edge.evidence_id].path == "src/app.ts"
         assert evidence[edge.evidence_id].span is not None
+
+
+def test_python_imports_and_calls_resolve_across_packages() -> None:
+    from code_genome_analyzers import analyze_source
+
+    files = [
+        analyze_source(
+            "services/api/app/routes.py",
+            "from .services import billing\nfrom app.models import Invoice\nimport fastapi\n\n"
+            "def handler():\n    return billing.charge(Invoice())\n",
+        ),
+        analyze_source("services/api/app/services/__init__.py", ""),
+        analyze_source(
+            "services/api/app/services/billing.py", "def charge(invoice):\n    return invoice\n"
+        ),
+        analyze_source("services/api/app/models.py", "class Invoice:\n    pass\n"),
+        analyze_source("services/api/app/broken.py", "from .missing import x\n"),
+    ]
+    graph = build_structural_graph("repo_py", SNAPSHOT_SHA, files)
+    keys = {node.id: node.natural_key for node in graph.nodes}
+    imports = {
+        (keys[edge.from_node], keys[edge.to_node]) for edge in graph.edges if edge.kind == "IMPORTS"
+    }
+    assert ("services/api/app/routes.py", "services/api/app/services/billing.py") in imports
+    assert ("services/api/app/routes.py", "services/api/app/models.py") in imports
+    assert ("services/api/app/routes.py", "external:fastapi") in imports
+    assert any(
+        item.code == "UNRESOLVED_IMPORT" and item.path.endswith("broken.py")
+        for item in graph.diagnostics
+    )
+    calls = {
+        (keys[edge.from_node], keys[edge.to_node]) for edge in graph.edges if edge.kind == "CALLS"
+    }
+    targets = {target for _, target in calls}
+    assert "services/api/app/models.py#class:Invoice:1:1" in targets
+    assert "services/api/app/services/billing.py#function:charge:1:1" in targets
+    assert graph.analysis_version.endswith("tree-sitter-js-ts-py@0.3.0")

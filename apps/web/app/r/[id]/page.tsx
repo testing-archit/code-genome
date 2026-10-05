@@ -353,7 +353,7 @@ function Figures({ overview }: { overview: RepositoryOverview }) {
   const { counts } = overview;
   const figures: Array<[number, string]> = [
     [counts.files, "files"],
-    [counts.source_files, "JS/TS source files"],
+    [counts.source_files, "source files (JS/TS, Python)"],
     [counts.commits, "commits analysed"],
     [counts.contributors, counts.contributors === 1 ? "contributor" : "contributors"],
     [counts.modules, "inferred modules"],

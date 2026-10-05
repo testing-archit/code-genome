@@ -39,7 +39,7 @@ HEALTH_VERSION = "health-heuristic@2"
 HIGH_RISK = 0.6
 DOCS_VERSION = "generated-docs@1"
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec|test-d)(/|$)|\.(test|spec)\.[a-z]+$", re.I)
-_CODE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+_CODE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi"}
 
 
 @dataclass
@@ -956,7 +956,7 @@ def _architecture(
     lines += [
         "## At a glance",
         "",
-        f"- {len(facts.paths)} files, {len(facts.source_paths)} JS/TS source files",
+        f"- {len(facts.paths)} files, {len(facts.source_paths)} source files (JS/TS, Python)",
         f"- {len(facts.modules)} inferred modules, {len(facts.internal_imports)} internal imports",
         f"- {len({c.author_email.lower() for c in facts.commits})} contributors across "
         f"{len(facts.commits)} analysed commits",
@@ -1032,7 +1032,7 @@ def _modules_doc(
             "",
         ]
     if not nodes:
-        lines.append("No JS/TS source components were found.")
+        lines.append("No JS/TS or Python source components were found.")
     lines += ["## Inferred modules", ""]
     lines += [
         f"- {_code(module.natural_key)} ({len(module.file_paths)} files, confidence "

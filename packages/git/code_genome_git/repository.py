@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
-SUPPORTED_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+SUPPORTED_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi"}
 BRANCH_PATTERN = re.compile(r"^(?!/|.*(?:\.\.|//|@\{|\\|\s))[^~^:?*\[]+(?<![/.])$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")

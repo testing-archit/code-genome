@@ -14,7 +14,7 @@ class SourceSpan:
 class ImportFact:
     module: str
     names: tuple[str, ...]
-    kind: Literal["esm", "commonjs", "dynamic"]
+    kind: Literal["esm", "commonjs", "dynamic", "python"]
     span: SourceSpan
 
 
@@ -68,7 +68,7 @@ class Diagnostic:
 @dataclass(frozen=True)
 class FileAnalysis:
     path: str
-    language: Literal["javascript", "typescript", "tsx"]
+    language: Literal["javascript", "typescript", "tsx", "python"]
     content_sha256: str
     analyzer_version: str
     imports: tuple[ImportFact, ...] = field(default_factory=tuple)

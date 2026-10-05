@@ -847,7 +847,7 @@ export type GraphEdgeTypeV2 = GraphEdge["type"] | "CALLS";
 
 /** FILE node `properties` written by structural-genome@0.2.0. */
 export type FileNodeMetrics = {
-  language: "javascript" | "typescript" | "tsx";
+  language: "javascript" | "typescript" | "tsx" | "python";
   content_sha256: string;
   parse_status: "COMPLETE" | "PARTIAL";
   /** Non-blank lines holding at least one non-comment token. */
