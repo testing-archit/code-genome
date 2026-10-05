@@ -5,7 +5,7 @@ import os
 import shutil
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -177,6 +177,20 @@ def _load_git_credential(
     return GitCredential(token=token)
 
 
+def _as_utc(value: datetime | str) -> datetime:
+    """Return the UTC instant for a commit timestamp.
+
+    Git records the author's offset (e.g. ``+05:30``). Some databases (SQLite) drop the
+    offset on write and keep the wall time, which would silently shift the instant, so
+    timestamps are normalized to UTC before they are stored. Naive values are already UTC
+    (that is how they come back from SQLite).
+    """
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _persist_history(
     db: Session,
     repository: Repository,
@@ -209,17 +223,26 @@ def _persist_history(
                     observed_at=observed_at,
                 )
             )
-    existing_shas = set(
-        db.scalars(
-            select(RepositoryCommit.sha).where(
+    existing_commits = {
+        item.sha: item
+        for item in db.scalars(
+            select(RepositoryCommit).where(
                 RepositoryCommit.workspace_id == repository.workspace_id,
                 RepositoryCommit.repository_id == repository.id,
                 RepositoryCommit.sha.in_([commit_item.sha for commit_item in commits]),
             )
         )
-    )
+    }
+    corrected = 0
     for commit_item in commits:
-        if commit_item.sha in existing_shas:
+        authored_at = _as_utc(commit_item.authored_at)
+        current_commit = existing_commits.get(commit_item.sha)
+        if current_commit is not None:
+            # Rows written before UTC normalization hold the author's wall time; the Git
+            # object is the immutable source, so re-ingesting it corrects the instant.
+            if _as_utc(current_commit.authored_at) != authored_at:
+                current_commit.authored_at = authored_at
+                corrected += 1
             continue
         db.add(
             RepositoryCommit(
@@ -230,10 +253,15 @@ def _persist_history(
                 parent_shas=list(commit_item.parent_shas),
                 author_name=commit_item.author_name,
                 author_email=commit_item.author_email,
-                authored_at=datetime.fromisoformat(commit_item.authored_at),
+                authored_at=authored_at,
                 message=commit_item.message,
                 observed_at=observed_at,
             )
+        )
+    if corrected:
+        logger.info(
+            "commit_timestamps_normalized",
+            extra={"repository_id": repository.id, "corrected": corrected},
         )
 
 
@@ -275,6 +303,7 @@ def _persist_evolution(
     evolution: EvolutionResult,
 ) -> None:
     if db.scalar(select(ModuleCandidate.id).where(ModuleCandidate.snapshot_id == snapshot.id)):
+        _normalize_change_times(db, repository, snapshot, evolution)
         return
     for commit in evolution.commits:
         per_file_churn = max(1, commit.churn // max(1, len(commit.files)))
@@ -287,7 +316,7 @@ def _persist_evolution(
                     snapshot_id=snapshot.id,
                     commit_sha=commit.sha,
                     path=path,
-                    authored_at=commit.authored_at,
+                    authored_at=_as_utc(commit.authored_at),
                     churn=per_file_churn,
                 )
             )
@@ -336,6 +365,27 @@ def _persist_evolution(
                 analysis_version=evolution.analysis_version,
             )
         )
+
+
+def _normalize_change_times(
+    db: Session,
+    repository: Repository,
+    snapshot: RepositorySnapshot,
+    evolution: EvolutionResult,
+) -> None:
+    """Correct file-change times stored before UTC normalization (idempotent)."""
+    instants = {commit.sha: _as_utc(commit.authored_at) for commit in evolution.commits}
+    if not instants:
+        return
+    for change in db.scalars(
+        select(FileChange).where(
+            FileChange.workspace_id == repository.workspace_id,
+            FileChange.snapshot_id == snapshot.id,
+        )
+    ):
+        instant = instants.get(change.commit_sha)
+        if instant is not None and _as_utc(change.authored_at) != instant:
+            change.authored_at = instant
 
 
 def _persist_graph(

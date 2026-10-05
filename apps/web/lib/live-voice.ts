@@ -23,6 +23,8 @@ export type VoiceEvent =
 const EVIDENCE_TOOL = "search_repository_evidence";
 const INPUT_RATE = 16000;
 const OUTPUT_RATE = 24000;
+/** Matches the server's question length limit. */
+export const MAX_TEXT_LENGTH = 2000;
 
 const workletSource = `
 class PcmDownsampler extends AudioWorkletProcessor {
@@ -105,6 +107,7 @@ export class LiveVoiceAgent {
   private ready = false;
   private muted = false;
   private closedByUser = false;
+  private failed = false;
   readonly inputAnalyser: { node: AnalyserNode | null } = { node: null };
   readonly outputAnalyser: { node: AnalyserNode | null } = { node: null };
 
@@ -117,21 +120,37 @@ export class LiveVoiceAgent {
 
   async start(): Promise<void> {
     this.emit({ type: "status", status: "connecting" });
+    let stream: MediaStream;
     try {
       // Ask for the microphone before minting a token: the token is single-use and
       // expires quickly if permission is denied.
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
+      if (this.closedByUser) return;
       this.fail("Microphone access was blocked. Allow the microphone for this site and try again.");
       return;
     }
+    // The user may have ended the call (or left the page) while the permission prompt was open.
+    if (this.closedByUser) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.stream = stream;
     let session: VoiceSession;
     try {
       session = await api.createVoiceSession(this.repositoryId, this.voice, this.language);
     } catch (caught) {
+      if (this.closedByUser) {
+        this.teardownAudio();
+        return;
+      }
       this.fail(caught instanceof Error ? caught.message : "The voice session could not start.");
+      return;
+    }
+    if (this.closedByUser) {
+      this.teardownAudio();
       return;
     }
     this.emit({ type: "session", session });
@@ -144,11 +163,25 @@ export class LiveVoiceAgent {
     const url = `${session.websocket_url}?access_token=${encodeURIComponent(session.token)}`;
     const socket = new WebSocket(url);
     this.socket = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ setup: session.setup }));
-    socket.onmessage = (message) => void this.receive(message.data);
-    socket.onerror = () => this.fail("The voice connection failed.");
+    socket.onopen = () => {
+      if (this.closedByUser) {
+        socket.close(1000, "user ended session");
+        return;
+      }
+      socket.send(JSON.stringify({ setup: session.setup }));
+    };
+    socket.onmessage = (message) => {
+      if (this.closedByUser) return;
+      void this.receive(message.data);
+    };
+    socket.onerror = () => {
+      if (this.closedByUser) return;
+      this.fail("The voice connection failed.");
+    };
     socket.onclose = (event) => {
       this.teardownAudio();
+      // A failure already reported its own error; do not replace it with "ended".
+      if (this.failed) return;
       if (this.closedByUser) {
         this.emit({ type: "status", status: "ended" });
       } else if (event.code !== 1000) {
@@ -165,16 +198,19 @@ export class LiveVoiceAgent {
   }
 
   sendText(text: string) {
-    if (!this.ready) return;
+    if (!this.ready || this.closedByUser) return;
+    text = text.slice(0, MAX_TEXT_LENGTH);
     this.send({ realtimeInput: { text } });
     this.emit({ type: "transcript", role: "user", text, final: true });
   }
 
   stop() {
+    const alreadyClosed = this.closedByUser;
     this.closedByUser = true;
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) this.socket.close(1000, "user ended session");
     this.teardownAudio();
-    this.emit({ type: "status", status: "ended" });
+    // Keep a reported failure visible; only announce "ended" for a call that was still running.
+    if (!alreadyClosed && !this.failed) this.emit({ type: "status", status: "ended" });
   }
 
   private send(payload: object) {
@@ -182,6 +218,8 @@ export class LiveVoiceAgent {
   }
 
   private fail(detail: string) {
+    if (this.failed) return;
+    this.failed = true;
     this.closedByUser = true;
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) this.socket.close();
     this.teardownAudio();
@@ -189,19 +227,22 @@ export class LiveVoiceAgent {
   }
 
   private async startMicrophone() {
-    if (!this.stream) return;
-    this.inputContext = new AudioContext();
+    if (!this.stream || this.closedByUser) return;
+    const context = new AudioContext();
+    this.inputContext = context;
     const moduleUrl = URL.createObjectURL(new Blob([workletSource], { type: "application/javascript" }));
     try {
-      await this.inputContext.audioWorklet.addModule(moduleUrl);
+      await context.audioWorklet.addModule(moduleUrl);
     } finally {
       URL.revokeObjectURL(moduleUrl);
     }
-    const source = this.inputContext.createMediaStreamSource(this.stream);
-    const analyser = this.inputContext.createAnalyser();
+    // teardownAudio() may have run while the module loaded; never reopen a stopped stream.
+    if (this.closedByUser || !this.stream || this.inputContext !== context) return;
+    const source = context.createMediaStreamSource(this.stream);
+    const analyser = context.createAnalyser();
     analyser.fftSize = 256;
     this.inputAnalyser.node = analyser;
-    this.worklet = new AudioWorkletNode(this.inputContext, "pcm-downsampler");
+    this.worklet = new AudioWorkletNode(context, "pcm-downsampler");
     this.worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
       if (this.muted || !this.ready) return;
       this.send({
@@ -222,11 +263,17 @@ export class LiveVoiceAgent {
       return;
     }
     if (message.setupComplete) {
+      if (this.closedByUser) return;
       this.ready = true;
       try {
         await this.startMicrophone();
       } catch {
-        this.fail("The microphone could not be started in this browser.");
+        if (!this.closedByUser) this.fail("The microphone could not be started in this browser.");
+        return;
+      }
+      // startMicrophone awaits the worklet module; the call may have ended meanwhile.
+      if (this.closedByUser) {
+        this.teardownAudio();
         return;
       }
       this.emit({ type: "status", status: "listening" });
@@ -284,6 +331,7 @@ export class LiveVoiceAgent {
         }
       }),
     );
+    if (this.closedByUser) return;
     this.send({ toolResponse: { functionResponses } });
   }
 

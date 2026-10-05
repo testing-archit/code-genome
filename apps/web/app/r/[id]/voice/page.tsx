@@ -6,7 +6,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { MicIcon, MicOffIcon, PhoneOffIcon, SendIcon } from "../../../../components/icons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { LanguagePicker, Notice, Panel, readLanguage, saveLanguage } from "../../../../components/ui";
-import { LiveVoiceAgent, VoiceEvent, VoiceStatus } from "../../../../lib/live-voice";
+import { LiveVoiceAgent, MAX_TEXT_LENGTH, VoiceEvent, VoiceStatus } from "../../../../lib/live-voice";
 import { moduleColor, shortSha } from "../../../../lib/format";
 
 const voices: Array<{ value: VoiceName; label: string }> = [
@@ -122,13 +122,26 @@ function VoiceAgent() {
     return () => cancelAnimationFrame(frame);
   }, [live, status]);
 
-  useEffect(() => () => agent.current?.stop(), []);
+  // Leaving the page ends the call, including one that is still connecting: the agent
+  // checks for a stop after every await, so the microphone is released either way.
+  useEffect(
+    () => () => {
+      agent.current?.stop();
+      agent.current = null;
+    },
+    [],
+  );
 
   async function start() {
+    agent.current?.stop();
     setLines([]);
     setSession(null);
     setMuted(false);
-    const instance = new LiveVoiceAgent(repository.id, voice, language, onEvent);
+    setDetail(null);
+    // Ignore late events from an earlier call so they cannot overwrite this one's status.
+    const instance: LiveVoiceAgent = new LiveVoiceAgent(repository.id, voice, language, (event) => {
+      if (agent.current === instance) onEvent(event);
+    });
     agent.current = instance;
     await instance.start();
   }
@@ -213,7 +226,7 @@ function VoiceAgent() {
             <form onSubmit={sendTyped} style={{ width: "min(100%, 460px)" }}>
               <div className="composer-box">
                 <label className="sr-only" htmlFor="voice-typed">Type instead of speaking</label>
-                <textarea id="voice-typed" onChange={(event) => setTyped(event.target.value)} placeholder="Or type a question into the call" rows={1} value={typed} />
+                <textarea id="voice-typed" maxLength={MAX_TEXT_LENGTH} onChange={(event) => setTyped(event.target.value)} placeholder="Or type a question into the call" rows={1} value={typed} />
                 <button aria-label="Send to call" className="button button-secondary" type="submit"><SendIcon size={16} /></button>
               </div>
             </form>

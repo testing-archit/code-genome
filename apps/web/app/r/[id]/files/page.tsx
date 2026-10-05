@@ -2,7 +2,7 @@
 
 import type { RepositoryInventory } from "@code-genome/contracts";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { FileIcon, FilesIcon } from "../../../../components/icons";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
@@ -13,6 +13,18 @@ import { useResource } from "../../../../lib/use-resource";
 
 type FileEntry = RepositoryInventory["files"][number];
 type TreeNode = { name: string; path: string; children: Map<string, TreeNode>; file: FileEntry | null; size: number; count: number };
+
+function ancestors(path: string): string[] {
+  const parts = path.split("/");
+  return parts.slice(1).map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
+/** Link to a file at a commit on the forge; each segment is encoded so `#`, `?` and spaces survive. */
+function sourceUrl(base: string, sha: string, path: string): string {
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  // Markdown renders by default; `?plain=1` shows the raw text so line anchors resolve.
+  return `${base}/blob/${encodeURIComponent(sha)}/${encoded}${/\.(md|mdx|markdown)$/i.test(path) ? "?plain=1" : ""}`;
+}
 
 function buildTree(files: FileEntry[]): TreeNode {
   const root: TreeNode = { name: "", path: "", children: new Map(), file: null, size: 0, count: 0 };
@@ -54,14 +66,21 @@ function FilesView() {
   const selectedPath = searchParams.get("path");
   const [query, setQuery] = useState("");
   const [analyzedOnly, setAnalyzedOnly] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    if (selectedPath) {
-      const parts = selectedPath.split("/");
-      for (let index = 1; index < parts.length; index++) initial.add(parts.slice(0, index).join("/"));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(selectedPath ? ancestors(selectedPath) : []));
+  // Reveal a file selected by navigation (e.g. a `?path=` link) while this page is already open.
+  const [revealedPath, setRevealedPath] = useState(selectedPath);
+  if (selectedPath !== revealedPath) {
+    setRevealedPath(selectedPath);
+    if (selectedPath && ancestors(selectedPath).some((path) => !expanded.has(path))) {
+      setExpanded((current) => new Set([...current, ...ancestors(selectedPath)]));
     }
-    return initial;
-  });
+  }
+  const treeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!selectedPath) return;
+    const row = treeRef.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(selectedPath)}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+  }, [selectedPath, inventory.data]);
 
   const files = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -89,7 +108,7 @@ function FilesView() {
       const style = { "--depth": depth } as React.CSSProperties;
       if (child.file) {
         return [
-          <button aria-pressed={selectedPath === child.path} className="tree-row" key={child.path} onClick={() => select(child.path)} style={style} type="button">
+          <button aria-pressed={selectedPath === child.path} className="tree-row" data-path={child.path} key={child.path} onClick={() => select(child.path)} style={style} type="button">
             <span className="caret" />
             <FileIcon size={15} />
             <span className="truncate">{child.name}</span>
@@ -120,6 +139,11 @@ function FilesView() {
         description={inventory.data ? `${inventory.data.files.length} in the manifest, ${inventory.data.files.filter((f) => f.analyzed).length} analyzed` : undefined}
         flush
       >
+        {inventory.data && inventory.data.limitations.length > 0 && (
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--rule)" }}>
+            <Notice tone="warn" title="Inventory is truncated">{inventory.data.limitations.join(" ")}</Notice>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, padding: "12px 16px", borderBottom: "1px solid var(--rule)", flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 180 }}><SearchField label="Filter files" onChange={setQuery} placeholder="Filter by path" value={query} /></div>
           <div className="segmented" role="group" aria-label="File filter">
@@ -130,7 +154,7 @@ function FilesView() {
         {inventory.loading ? <Loading rows={8} height={24} /> : files.length === 0 ? (
           <Empty title="No files match">Try a shorter path fragment.</Empty>
         ) : (
-          <div className="tree" role="tree" aria-label="Repository files">{renderNode(tree, 0)}</div>
+          <div className="tree" role="tree" aria-label="Repository files" ref={treeRef}>{renderNode(tree, 0)}</div>
         )}
       </Panel>
       {selectedPath ? <FileDetail key={selectedPath} path={selectedPath} /> : (
@@ -156,7 +180,7 @@ function FileDetail({ path }: { path: string }) {
     <Panel
       title={path.split("/").pop()}
       description={<code style={{ overflowWrap: "anywhere" }}>{path}</code>}
-      actions={<a className="button button-secondary button-small" href={`${base}/blob/${sha}/${path}`} rel="noreferrer" target="_blank">View source</a>}
+      actions={<a className="button button-secondary button-small" href={sourceUrl(base, sha, path)} rel="noreferrer" target="_blank">View source</a>}
     >
       <div style={{ display: "grid", gap: 20 }}>
         <dl className="kv">
@@ -169,7 +193,12 @@ function FileDetail({ path }: { path: string }) {
 
         <div>
           <h3 style={{ marginBottom: 8 }}>Change risk</h3>
-          {risk.loading ? <div className="skeleton" style={{ height: 40 }} /> : score ? (
+          {risk.loading ? <div className="skeleton" style={{ height: 40 }} /> : risk.error ? (
+            <div style={{ display: "grid", gap: 8, justifyItems: "start" }}>
+              <Notice tone="error" title="Change risk could not be loaded">{risk.error}</Notice>
+              <button className="button button-secondary button-small" onClick={risk.reload} type="button">Try again</button>
+            </div>
+          ) : score ? (
             <div style={{ display: "grid", gap: 8 }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}><Meter tone="eosin" value={score.score} /><strong>{Math.round(score.score * 100)}</strong><span className="muted small">relative to other files</span></div>
               <p className="small">{score.rationale}</p>

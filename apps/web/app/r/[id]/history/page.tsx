@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Notice, Panel, SearchField } from "../../../../components/ui";
-import { formatDate, formatTime, parseTime, relativeTime, shortSha } from "../../../../lib/format";
+import { formatDate, formatTime, localDayKey, parseTime, relativeTime, shortSha } from "../../../../lib/format";
 
 export default function HistoryPage() {
   return (
@@ -37,16 +37,15 @@ function HistoryView() {
 
   const days = useMemo(() => {
     if (commits.length === 0) return [];
+    // Bucket keys, the 60-day axis, and the header label all use the viewer's local calendar day.
     const newest = parseTime(commits[0].authored_at);
     const buckets = new Map<string, number>();
     commits.forEach((commit) => {
-      const key = commit.authored_at.slice(0, 10);
+      const key = localDayKey(parseTime(commit.authored_at));
       buckets.set(key, (buckets.get(key) ?? 0) + 1);
     });
     return Array.from({ length: 60 }, (_, index) => {
-      const day = new Date(newest);
-      day.setUTCDate(day.getUTCDate() - (59 - index));
-      const key = day.toISOString().slice(0, 10);
+      const key = localDayKey(new Date(newest.getFullYear(), newest.getMonth(), newest.getDate() - (59 - index)));
       return { key, count: buckets.get(key) ?? 0 };
     });
   }, [commits]);

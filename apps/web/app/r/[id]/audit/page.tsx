@@ -8,7 +8,7 @@ import { EvidenceChips, useRepo } from "../../../../components/repo-context";
 import { Empty, Loading, Meter, Notice, Panel } from "../../../../components/ui";
 import { useWorkspace } from "../../../../components/workspace";
 import { api, errorMessage } from "../../../../lib/api";
-import { formatDate, relativeTime } from "../../../../lib/format";
+import { formatScopeDate, localDateInput, relativeTime } from "../../../../lib/format";
 
 const statusStyle: Record<string, { label: string; badge: string }> = {
   VERIFIED: { label: "Supported by repository evidence", badge: "badge-ok" },
@@ -17,22 +17,25 @@ const statusStyle: Record<string, { label: string; badge: string }> = {
   EXTERNAL_EVIDENCE_REQUIRED: { label: "Needs CI or deployment evidence", badge: "" },
 };
 
-function dateInput(daysAgo: number) {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - daysAgo);
-  return date.toISOString().slice(0, 10);
+/** A report has been created but its claims have not all been assessed (e.g. assessment failed). */
+function unassessed(report: DeliveryReport): boolean {
+  return report.claims.some((claim) => !claim.assessment);
 }
 
 export default function AuditPage() {
   const { repository } = useRepo();
   const { toast } = useWorkspace();
   const [text, setText] = useState("");
-  const [from, setFrom] = useState(() => dateInput(30));
-  const [to, setTo] = useState(() => dateInput(0));
+  // Inputs are local calendar days, so early-morning users east of UTC default to today.
+  const [from, setFrom] = useState(() => localDateInput(30));
+  const [to, setTo] = useState(() => localDateInput(0));
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reports, setReports] = useState<DeliveryReport[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [listNonce, setListNonce] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [rechecking, setRechecking] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,32 +43,66 @@ export default function AuditPage() {
       .listDeliveryReports(repository.id)
       .then((items) => {
         if (!active) return;
-        setReports(items);
+        setListError(null);
+        // Keep locally created reports the list request may not have seen yet.
+        setReports((current) => [...(current ?? []).filter((item) => !items.some((next) => next.id === item.id)), ...items]);
         setActiveId((current) => current ?? items[0]?.id ?? null);
       })
-      .catch(() => {
-        if (active) setReports([]);
+      .catch((caught: unknown) => {
+        if (active) setListError(errorMessage(caught, "Past checks could not be loaded."));
       });
     return () => {
       active = false;
     };
-  }, [repository.id]);
+  }, [repository.id, listNonce]);
+
+  function retryList() {
+    setListError(null);
+    setListNonce((value) => value + 1);
+  }
+
+  function upsert(report: DeliveryReport) {
+    setReports((current) => [report, ...(current ?? []).filter((item) => item.id !== report.id)]);
+    setActiveId(report.id);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setWorking(true);
     setError(null);
+    let created: DeliveryReport;
     try {
-      const created = await api.createDeliveryReport(repository.id, text, from, to, repository.default_branch);
+      created = await api.createDeliveryReport(repository.id, text, from, to, repository.default_branch);
+    } catch (caught) {
+      setError(errorMessage(caught, "The report could not be saved."));
+      setWorking(false);
+      return;
+    }
+    // The report now exists; keep it even if the check fails so a retry does not create a duplicate.
+    upsert(created);
+    setText("");
+    try {
       const assessed = await api.assessDeliveryReport(created.id);
-      setReports((current) => [assessed, ...(current ?? []).filter((item) => item.id !== assessed.id)]);
-      setActiveId(assessed.id);
-      setText("");
+      upsert(assessed);
       toast(`Checked ${assessed.claims.length} claims`);
     } catch (caught) {
-      setError(errorMessage(caught, "The report could not be checked."));
+      setError(`The report was saved but its claims were not checked: ${errorMessage(caught, "the check failed.")} Use “Run check again” on the saved report.`);
     } finally {
       setWorking(false);
+    }
+  }
+
+  async function recheck(reportId: string) {
+    setRechecking(reportId);
+    setError(null);
+    try {
+      const assessed = await api.assessDeliveryReport(reportId);
+      upsert(assessed);
+      toast(`Checked ${assessed.claims.length} claims`);
+    } catch (caught) {
+      setError(errorMessage(caught, "The claims could not be checked."));
+    } finally {
+      setRechecking(null);
     }
   }
 
@@ -95,11 +132,17 @@ export default function AuditPage() {
           </form>
         </Panel>
         <Panel title="Past checks" flush>
-          {reports === null ? <Loading rows={3} /> : reports.length === 0 ? <Empty title="No reports checked yet">Checked reports are kept here with their evidence.</Empty> : (
+          {listError && (
+            <div className="panel-body" style={{ display: "grid", gap: 8, justifyItems: "start" }}>
+              <Notice tone="error" title="Past checks could not be loaded">{listError}</Notice>
+              <button className="button button-secondary button-small" onClick={retryList} type="button">Try again</button>
+            </div>
+          )}
+          {reports === null ? (listError ? null : <Loading rows={3} />) : reports.length === 0 ? (listError ? null : <Empty title="No reports checked yet">Checked reports are kept here with their evidence.</Empty>) : (
             <div className="list">
               {reports.map((item) => (
                 <button aria-pressed={item.id === activeId} className="list-row" key={item.id} onClick={() => setActiveId(item.id)} type="button">
-                  <div className="grow"><span className="truncate" style={{ display: "block" }}>{item.raw_text.split("\n")[0]}</span><small>{item.claims.length} claims · {relativeTime(item.created_at)}</small></div>
+                  <div className="grow"><span className="truncate" style={{ display: "block" }}>{item.raw_text.split("\n")[0]}</span><small>{item.claims.length} claims · {unassessed(item) ? "not checked yet · " : ""}{relativeTime(item.created_at)}</small></div>
                 </button>
               ))}
             </div>
@@ -109,8 +152,17 @@ export default function AuditPage() {
 
       <Panel
         title={report ? `${report.claims.length} claims` : "Results"}
-        description={report ? `${formatDate(report.scope.from)} to ${formatDate(report.scope.to)} on ${report.scope.branches.join(", ")}` : "Results appear here after a check."}
-        actions={report && <button className="button button-secondary button-small" onClick={() => void api.downloadDeliveryReport(report.id).catch((caught: unknown) => toast(errorMessage(caught, "Download failed.")))} type="button"><DownloadIcon size={15} />Markdown</button>}
+        description={report ? `${formatScopeDate(report.scope.from)} to ${formatScopeDate(report.scope.to)} (UTC) on ${report.scope.branches.join(", ")}` : "Results appear here after a check."}
+        actions={report && (
+          <div style={{ display: "flex", gap: 8 }}>
+            {unassessed(report) && (
+              <button className="button button-primary button-small" disabled={rechecking === report.id || working} onClick={() => void recheck(report.id)} type="button">
+                {rechecking === report.id ? "Checking…" : "Run check again"}
+              </button>
+            )}
+            <button className="button button-secondary button-small" onClick={() => void api.downloadDeliveryReport(report.id).catch((caught: unknown) => toast(errorMessage(caught, "Download failed.")))} type="button"><DownloadIcon size={15} />Markdown</button>
+          </div>
+        )}
         flush
       >
         {!report ? (

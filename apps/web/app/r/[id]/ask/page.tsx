@@ -18,7 +18,8 @@ const suggestions: Record<AnswerLanguage, string[]> = {
   hinglish: ["Recently kya change hua hai?", "Sabse risky files kaunsi hain?", "Billing module kahan hai?"],
 };
 
-type PendingTurn = { question: string; draft: string; model: string | null; replaced: boolean } | null;
+/** `conversationId` is null while a new conversation is being created for the turn. */
+type PendingTurn = { conversationId: string | null; question: string; draft: string; model: string | null; replaced: boolean } | null;
 
 /** Hide `[1]`-style citation markers (including a half-received one) in streamed drafts. */
 function cleanDraft(text: string): string {
@@ -53,12 +54,26 @@ function Chat() {
   const [threadsOpen, setThreadsOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   // Conversations created by sending a message already hold their messages locally;
-  // fetching them again could overwrite the first answer with an older copy.
+  // fetching them again could overwrite the first answer with an older copy. Cleared as
+  // soon as another thread is selected, so coming back fetches the stored copy.
   const createdLocally = useRef<string | null>(null);
-  const setActiveId = useCallback((id: string | null) => {
-    if (id === null) setMessages([]);
+  // The selected thread, readable from async callbacks so late responses can be dropped.
+  const activeIdRef = useRef<string | null>(null);
+  const selectThread = useCallback((id: string | null) => {
+    activeIdRef.current = id;
     setActiveIdState(id);
   }, []);
+  const setActiveId = useCallback(
+    (id: string | null) => {
+      if (id === activeIdRef.current) return;
+      // Never show one thread's messages (or a failed load's leftovers) under another.
+      createdLocally.current = null;
+      setMessages([]);
+      setError(null);
+      selectThread(id);
+    },
+    [selectThread],
+  );
   const initialQuestion = useRef(searchParams.get("q"));
 
   useEffect(() => {
@@ -74,7 +89,10 @@ function Chat() {
       .then((items) => {
         if (!active) return;
         setThreads(items);
-        if (!initialQuestion.current && items[0]) setActiveIdState(items[0].id);
+        // Only open the latest thread if the user has not already picked or started one.
+        if (!initialQuestion.current && items[0] && activeIdRef.current === null && !createdLocally.current) {
+          selectThread(items[0].id);
+        }
       })
       .catch((caught: unknown) => {
         if (active) {
@@ -85,7 +103,7 @@ function Chat() {
     return () => {
       active = false;
     };
-  }, [repository.id]);
+  }, [repository.id, selectThread]);
 
   useEffect(() => {
     if (!activeId || createdLocally.current === activeId) return;
@@ -93,10 +111,16 @@ function Chat() {
     api
       .getConversation(activeId)
       .then((conversation) => {
-        if (active) setMessages(conversation.messages);
+        if (!active || activeIdRef.current !== conversation.id) return;
+        // Keep any turn that finished while this request was in flight: merge by id
+        // rather than replacing the list with a possibly older copy.
+        setMessages((current) => {
+          const stored = new Set(conversation.messages.map((message) => message.id));
+          return [...conversation.messages, ...current.filter((message) => !stored.has(message.id))];
+        });
       })
       .catch((caught: unknown) => {
-        if (active) setError(errorMessage(caught, "The conversation could not be opened."));
+        if (active && activeIdRef.current === activeId) setError(errorMessage(caught, "The conversation could not be opened."));
       });
     return () => {
       active = false;
@@ -117,33 +141,45 @@ function Chat() {
         return;
       }
       setError(null);
-      setPending({ question, draft: "", model: null, replaced: false });
+      setPending({ conversationId: activeId, question, draft: "", model: null, replaced: false });
       setDraft("");
       try {
         let conversationId = activeId;
         if (!conversationId) {
           const created = await api.createConversation(repository.id);
           conversationId = created.id;
-          createdLocally.current = created.id;
-          setMessages([]);
           setThreads((current) => [created, ...(current ?? [])]);
-          setActiveIdState(created.id);
+          setPending((current) => (current ? { ...current, conversationId: created.id } : current));
+          // Open the new thread only if the user is still on the "new conversation" view.
+          if (activeIdRef.current === null) {
+            createdLocally.current = created.id;
+            setMessages([]);
+            selectThread(created.id);
+          }
         }
         const turn = await api.streamMessage(conversationId, question, language, {
           onStatus: (model) => setPending((current) => (current ? { ...current, model } : current)),
           onDelta: (text) => setPending((current) => (current ? { ...current, draft: current.draft + text } : current)),
           onFallback: () => setPending((current) => (current ? { ...current, draft: "", replaced: true } : current)),
         });
-        setMessages((current) => [...current, turn.user_message, turn.assistant_message]);
+        // If the user switched threads meanwhile, the turn belongs to the other thread;
+        // it is stored server-side and appears when that thread is opened again.
+        if (activeIdRef.current === conversationId) {
+          setMessages((current) => [
+            ...current.filter((message) => message.id !== turn.user_message.id && message.id !== turn.assistant_message.id),
+            turn.user_message,
+            turn.assistant_message,
+          ]);
+        }
         setThreads((current) => [turn.conversation, ...(current ?? []).filter((item) => item.id !== turn.conversation.id)]);
       } catch (caught) {
         setError(errorMessage(caught, "The question could not be answered."));
-        setDraft(question);
+        setDraft((current) => current || question);
       } finally {
         setPending(null);
       }
     },
-    [activeId, language, pending, repository.id],
+    [activeId, language, pending, repository.id, selectThread],
   );
 
   useEffect(() => {
@@ -182,6 +218,8 @@ function Chat() {
     }
   }
 
+  const showPending = Boolean(pending) && pending?.conversationId === activeId;
+
   return (
     <div className="chat" style={{ position: "relative" }}>
       <aside className="chat-threads" data-open={threadsOpen} aria-label="Conversations">
@@ -215,7 +253,7 @@ function Chat() {
         </div>
 
         <div aria-live="polite" className="chat-log" ref={logRef}>
-          {messages.length === 0 && !pending && (
+          {messages.length === 0 && !showPending && (
             <div className="empty centered" style={{ alignSelf: "center" }}>
               <span className="empty-mark"><HelixMark size={34} /></span>
               <h3>Ask what the repository can show</h3>
@@ -228,7 +266,7 @@ function Chat() {
             </div>
           )}
           {messages.map((message) => <Message key={message.id} message={message} />)}
-          {pending && (
+          {pending && showPending && (
             <>
               <div className="msg msg-user"><div className="msg-body">{pending.question}</div></div>
               <div className="msg msg-assistant" aria-busy="true">

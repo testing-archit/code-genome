@@ -8,8 +8,30 @@ export function formatTime(value: string | null | undefined): string {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(parseTime(value));
 }
 
+/** A moment in time, shown as a calendar date in the viewer's time zone. */
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(parseTime(value));
+}
+
+/**
+ * A date-only value (such as a report scope boundary stored as `…T00:00:00Z` or
+ * `…T23:59:59Z`), shown as the UTC calendar date it names. Formatting it in local time
+ * would move `23:59:59Z` to the next day east of UTC.
+ */
+export function formatScopeDate(value: string): string {
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(parseTime(value));
+}
+
+/** `YYYY-MM-DD` for the viewer's local calendar day, `daysAgo` days before today (for date inputs). */
+export function localDateInput(daysAgo = 0, now: Date = new Date()): string {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo);
+  return localDayKey(date);
+}
+
+/** `YYYY-MM-DD` for the local calendar day containing `date`. */
+export function localDayKey(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 export function relativeTime(value: string | null | undefined): string {

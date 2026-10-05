@@ -2,7 +2,7 @@
 
 import type { SearchResults } from "@code-genome/contracts";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 
 import { SearchIcon } from "../../../../components/icons";
 import { RequiresSnapshot, useRepo } from "../../../../components/repo-context";
@@ -35,18 +35,29 @@ function SearchView() {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only the latest request may update the page; slower earlier responses are dropped.
+  const sequence = useRef(0);
 
   async function run(text: string, filter = kind) {
     if (text.trim().length < 2) return;
+    const request = ++sequence.current;
     setLoading(true);
     setError(null);
     try {
-      setResults(await api.search(repository.id, text.trim(), filter || undefined));
+      const next = await api.search(repository.id, text.trim(), filter || undefined);
+      if (request === sequence.current) setResults(next);
     } catch (caught) {
-      setError(errorMessage(caught, "Search failed."));
+      if (request === sequence.current) setError(errorMessage(caught, "Search failed."));
     } finally {
-      setLoading(false);
+      if (request === sequence.current) setLoading(false);
     }
+  }
+
+  function changeKind(value: string) {
+    setKind(value);
+    // Re-run what is in the box now; fall back to the shown query if the box is too short.
+    const text = query.trim().length >= 2 ? query : results?.query;
+    if (text) void run(text, value);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -67,7 +78,7 @@ function SearchView() {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
             <div className="segmented" role="group" aria-label="Result type">
               {kinds.map((item) => (
-                <button aria-pressed={kind === item.value} key={item.value} onClick={() => { setKind(item.value); if (results) void run(results.query, item.value); }} type="button">{item.label}</button>
+                <button aria-pressed={kind === item.value} key={item.value} onClick={() => changeKind(item.value)} type="button">{item.label}</button>
               ))}
             </div>
             <div className="suggestions">
