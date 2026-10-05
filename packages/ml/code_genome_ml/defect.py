@@ -44,6 +44,7 @@ method produced them (``contribution_method``):
   the values need not sum to the probability.
 """
 
+import importlib.util
 import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -409,7 +410,34 @@ CONTRIBUTION_METHODS: dict[str, tuple[str, str]] = {
         "Values are not additive across features.",
         "probability",
     ),
+    "random_forest_shap": (
+        "TreeSHAP (shap.TreeExplainer): exact Shapley values of the forest's predicted "
+        "probability; they add up to the file's probability minus the average prediction.",
+        "probability",
+    ),
+    "gradient_boosting_shap": (
+        "TreeSHAP (shap.TreeExplainer): exact Shapley values of the model's log-odds; they add "
+        "up to the file's log-odds minus the average log-odds.",
+        "log-odds",
+    ),
 }
+
+
+def _shap_contributions(model: Candidate, x_now: np.ndarray, name: str) -> np.ndarray | None:
+    """TreeSHAP values for the positive class when the optional ``shap`` package is installed."""
+    if importlib.util.find_spec("shap") is None:
+        return None
+    try:
+        import shap  # noqa: PLC0415
+
+        values = np.asarray(shap.TreeExplainer(model).shap_values(x_now))
+    except Exception:  # noqa: BLE001 - an unsupported model or version falls back
+        return None
+    if values.ndim == 3:  # (rows, features, classes)
+        values = values[:, :, 1]
+    if values.shape != x_now.shape:
+        return None
+    return values
 
 
 def _build(name: str) -> Candidate:
@@ -593,8 +621,13 @@ def train_defect_model(
         contributions = scaler.transform(x_now) * coefficients
         method, unit = CONTRIBUTION_METHODS["logistic_regression"]
     else:
-        contributions = _reset_contributions(final, x_now, np.median(x_all, axis=0))
-        method, unit = CONTRIBUTION_METHODS["tree_ensemble"]
+        explained = _shap_contributions(final, x_now, champion)
+        if explained is not None:
+            contributions = explained
+            method, unit = CONTRIBUTION_METHODS[f"{champion}_shap"]
+        else:
+            contributions = _reset_contributions(final, x_now, np.median(x_all, axis=0))
+            method, unit = CONTRIBUTION_METHODS["tree_ensemble"]
     high, medium = (
         np.quantile(probabilities, [0.9, 0.6]) if len(probabilities) >= 5 else (0.66, 0.33)
     )

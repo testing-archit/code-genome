@@ -45,6 +45,12 @@ deep = [
 embeddings = [
   "sentence-transformers>=3,<6",
 ]
+explain = [
+  "shap>=0.46,<1",
+  # Floors keep the resolver off old llvmlite releases that do not build on current Python.
+  "numba>=0.61",
+  "llvmlite>=0.44",
+]
 
 [tool.setuptools.packages.find]
 where = ["services/api", "services/worker", "packages/analyzers", "packages/delivery-auditor", "packages/evolution", "packages/genome", "packages/git", "packages/intelligence", "packages/ml"]
@@ -66,6 +72,12 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+# Optional model backends (extras "deep", "embeddings", "explain") may be absent or untyped.
+[[tool.mypy.overrides]]
+module = ["shap", "shap.*", "torch", "torch.*", "sentence_transformers", "sentence_transformers.*"]
+ignore_missing_imports = true
+follow_untyped_imports = false
 
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "scipy.*", "networkx.*"]
