@@ -6,6 +6,9 @@ import { errorMessage } from "./api";
 
 /* A small keyed cache so moving between tabs does not refetch published snapshot data. */
 const cache = new Map<string, unknown>();
+/* Mounted hooks listen for invalidation so a re-analysis of the same commit (same keys)
+   still refetches what is on screen. */
+const listeners = new Set<(prefix: string) => void>();
 
 export type Resource<T> = {
   data: T | null;
@@ -36,6 +39,17 @@ export function useResource<T>(key: string | null, load: () => Promise<T>): Reso
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, nonce]);
 
+  useEffect(() => {
+    if (!key) return;
+    const listener = (prefix: string) => {
+      if (key.startsWith(prefix)) setNonce((value) => value + 1);
+    };
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, [key]);
+
   const reload = useCallback(() => {
     if (key) cache.delete(key);
     setNonce((value) => value + 1);
@@ -49,4 +63,5 @@ export function useResource<T>(key: string | null, load: () => Promise<T>): Reso
 
 export function invalidate(prefix: string) {
   for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
+  for (const listener of listeners) listener(prefix);
 }

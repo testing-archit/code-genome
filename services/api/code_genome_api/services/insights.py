@@ -336,6 +336,7 @@ class ModuleNode:
     inferred: bool
     description: str
     riskiest: list[str]
+    paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -422,6 +423,7 @@ def module_graph(facts: SnapshotFacts) -> tuple[list[ModuleNode], list[ModuleLin
                     + "."
                 ),
                 riskiest=riskiest,
+                paths=sorted(paths)[:200],
             )
         )
     return nodes, sorted(links.values(), key=lambda item: (-item.imports, -item.co_changes))
@@ -470,10 +472,17 @@ def _readme_intro(facts: SnapshotFacts) -> tuple[str, str] | None:
         lines = [
             line.strip()
             for line in chunk.text.splitlines()
-            if line.strip() and not line.lstrip().startswith(("#", "!", "<", "[!", "|", "```"))
+            if line.strip()
+            and not line.lstrip().startswith(("#", "!", "<", "[!", "|", "```"))
+            and not re.fullmatch(r"\s*([-*_]\s*){3,}", line)
         ]
         if lines:
-            return " ".join(lines)[:700], f"evidence:{chunk.provenance_id}"
+            # README lines are often separate sentences without trailing punctuation.
+            text = " ".join(
+                line if re.search(r"[.!?:;,]$", line) or index == len(lines) - 1 else f"{line}."
+                for index, line in enumerate(lines)
+            )
+            return text[:700], f"evidence:{chunk.provenance_id}"
     return None
 
 

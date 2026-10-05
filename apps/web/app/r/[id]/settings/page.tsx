@@ -79,7 +79,7 @@ export default function SettingsPage() {
             <form onSubmit={save} style={{ display: "grid", gap: 12 }}>
               <label className="field">
                 {connection.connected ? "Replace token" : "Fine-grained personal access token"}
-                <input autoComplete="off" className="input" minLength={8} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_…" required type="password" value={token} />
+                <input autoComplete="off" className="input" maxLength={1024} minLength={8} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_…" required type="password" value={token} />
                 <small>Give it read-only access to Contents for this repository only.</small>
               </label>
               {error && <Notice tone="error">{error}</Notice>}

@@ -710,6 +710,7 @@ class ModuleNodeResponse(BaseModel):
     inferred: bool
     description: str
     riskiest: list[str]
+    paths: list[str]
 
 
 class ModuleLinkResponse(BaseModel):

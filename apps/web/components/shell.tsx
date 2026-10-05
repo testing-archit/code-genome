@@ -13,10 +13,12 @@ import {
   CloseIcon,
   CompareIcon,
   DiffIcon,
+  DocIcon,
   FilesIcon,
   GraphIcon,
   HelixMark,
   HistoryIcon,
+  HotspotIcon,
   LayersIcon,
   MenuIcon,
   MicIcon,
@@ -31,22 +33,38 @@ import {
 } from "./icons";
 import { useWorkspace, WorkspaceProvider } from "./workspace";
 
+export type SectionGroup = "Understand" | "Predict" | "Explain" | "Repository";
+
+/* Grouped by the three jobs the product does: understand the system, predict what a change
+   will do, and explain it in plain language. Every view is always visible in the rail. */
 export const repoSections = [
-  { slug: "", label: "Overview", icon: OverviewIcon, keywords: "summary genome status" },
-  { slug: "ask", label: "Ask", icon: ChatIcon, keywords: "chat chatbot question conversation" },
-  { slug: "voice", label: "Voice agent", icon: MicIcon, keywords: "voice talk speak live hindi hinglish" },
-  { slug: "search", label: "Search", icon: SearchIcon, keywords: "semantic search bm25 find code" },
-  { slug: "graph", label: "Dependency graph", icon: GraphIcon, keywords: "imports nodes edges" },
-  { slug: "files", label: "Files", icon: FilesIcon, keywords: "tree explorer manifest" },
-  { slug: "history", label: "History", icon: HistoryIcon, keywords: "commits timeline authors" },
-  { slug: "architecture", label: "Architecture", icon: LayersIcon, keywords: "modules co-change hotspots" },
-  { slug: "risk", label: "Risk and impact", icon: PulseIcon, keywords: "risk impact blast radius" },
-  { slug: "change", label: "Change check", icon: DiffIcon, keywords: "diff pull request pr patch change impact review" },
-  { slug: "compare", label: "Compare", icon: CompareIcon, keywords: "compare snapshots branches diff drift export" },
-  { slug: "models", label: "Models", icon: ModelsIcon, keywords: "machine learning ml models training evaluation defect prediction" },
-  { slug: "audit", label: "Delivery audit", icon: AuditIcon, keywords: "claims report verify" },
-  { slug: "settings", label: "Settings", icon: SettingsIcon, keywords: "private access token connection" },
+  { slug: "", label: "Overview", group: null, icon: OverviewIcon, keywords: "summary genome status health score" },
+  { slug: "explorer", label: "Architecture explorer", group: "Understand", icon: LayersIcon, keywords: "components map modules architecture dependencies" },
+  { slug: "docs", label: "Generated docs", group: "Understand", icon: DocIcon, keywords: "documentation architecture modules data flow dependencies business logic risk report markdown" },
+  { slug: "architecture", label: "Modules and hotspots", group: "Understand", icon: HotspotIcon, keywords: "modules co-change hotspots" },
+  { slug: "graph", label: "Dependency graph", group: "Understand", icon: GraphIcon, keywords: "imports nodes edges files" },
+  { slug: "files", label: "Files", group: "Understand", icon: FilesIcon, keywords: "tree explorer manifest" },
+  { slug: "history", label: "Evolution timeline", group: "Understand", icon: HistoryIcon, keywords: "commits timeline authors history" },
+  { slug: "change", label: "Change impact", group: "Predict", icon: DiffIcon, keywords: "what will break impact diff pull request pr patch change simulator" },
+  { slug: "risk", label: "Risk", group: "Predict", icon: PulseIcon, keywords: "risk defect blast radius" },
+  { slug: "compare", label: "Compare snapshots", group: "Predict", icon: CompareIcon, keywords: "compare snapshots branches drift" },
+  { slug: "models", label: "Models", group: "Predict", icon: ModelsIcon, keywords: "machine learning ml models training evaluation defect prediction" },
+  { slug: "ask", label: "Ask", group: "Explain", icon: ChatIcon, keywords: "chat chatbot question conversation archaeologist" },
+  { slug: "voice", label: "Voice agent", group: "Explain", icon: MicIcon, keywords: "voice talk speak live hindi hinglish" },
+  { slug: "search", label: "Search", group: "Explain", icon: SearchIcon, keywords: "semantic search bm25 find code" },
+  { slug: "audit", label: "Delivery audit", group: "Explain", icon: AuditIcon, keywords: "claims report verify" },
+  { slug: "settings", label: "Settings", group: "Repository", icon: SettingsIcon, keywords: "private access token connection automation webhook" },
 ] as const;
+
+export const sectionGroups: SectionGroup[] = ["Understand", "Predict", "Explain", "Repository"];
+
+export function sectionFor(pathname: string, repositoryId: string) {
+  const base = `/r/${repositoryId}`;
+  return (
+    repoSections.find((section) => section.slug && pathname.startsWith(`${base}/${section.slug}`)) ??
+    repoSections[0]
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -84,7 +102,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
           <span className="brand-mark"><HelixMark /></span>
           <span><strong>Code Genome</strong><small>Repository evidence</small></span>
         </Link>
-        <nav className="rail-section grow" aria-label="Repositories">
+        <nav className={`rail-section ${activeRepoId ? "rail-repos" : "grow"}`} aria-label="Repositories">
           <div className="rail-heading">
             <span>Repositories</span>
             <button aria-label="Add repository" onClick={() => setDialog("add-repository")} title="Add repository" type="button">
@@ -93,13 +111,13 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
           </div>
           {loading && [0, 1, 2].map((item) => <div className="skeleton" key={item} style={{ height: 36, margin: "2px 8px" }} />)}
           {!loading && repositories.length === 0 && (
-            <p className="muted small" style={{ padding: "4px 8px" }}>Nothing added yet.</p>
+            <p className="muted small" style={{ padding: "4px 8px" }}>Add a GitHub repository to start.</p>
           )}
           {repositories.map((repository) => {
             const { owner, name } = repoName(repository.external_id);
             return (
               <Link
-                aria-current={activeRepoId === repository.id ? "page" : undefined}
+                aria-current={activeRepoId === repository.id ? "true" : undefined}
                 className="rail-link"
                 href={`/r/${repository.id}`}
                 key={repository.id}
@@ -113,6 +131,9 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+        {activeRepoId && repositories.some((item) => item.id === activeRepoId) && (
+          <RepoNav pathname={pathname} repositoryId={activeRepoId} />
+        )}
         <div className="rail-foot">
           <Link aria-current={pathname === "/activity" ? "page" : undefined} className="rail-link" href="/activity">
             <ActivityIcon /> Activity log
@@ -129,6 +150,40 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
         {toasts.map((item) => <div className="toast" key={item.id}>{item.text}</div>)}
       </div>
     </div>
+  );
+}
+
+function RepoNav({ repositoryId, pathname }: { repositoryId: string; pathname: string }) {
+  const base = `/r/${repositoryId}`;
+  const current = sectionFor(pathname, repositoryId);
+  const overview = repoSections[0];
+  const OverviewGlyph = overview.icon;
+  return (
+    <nav aria-label="Repository views" className="rail-section grow rail-views">
+      <Link aria-current={current.slug === "" ? "page" : undefined} className="rail-link" href={base}>
+        <OverviewGlyph size={17} />{overview.label}
+      </Link>
+      {sectionGroups.map((group) => (
+        <div className="rail-group" key={group}>
+          <div className="rail-group-label">{group}</div>
+          {repoSections
+            .filter((section) => section.group === group)
+            .map((section) => {
+              const Icon = section.icon;
+              return (
+                <Link
+                  aria-current={current.slug === section.slug ? "page" : undefined}
+                  className="rail-link"
+                  href={`${base}/${section.slug}`}
+                  key={section.slug}
+                >
+                  <Icon size={17} />{section.label}
+                </Link>
+              );
+            })}
+        </div>
+      ))}
+    </nav>
   );
 }
 
@@ -344,12 +399,12 @@ function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
         <form onSubmit={submit}>
           <label className="field">
             GitHub URL
-            <input autoFocus className="input" onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository" ref={input} required type="url" value={url} />
+            <input autoFocus className="input" maxLength={500} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository" ref={input} required type="url" value={url} />
             <small>Never paste credentials into the URL.</small>
           </label>
           <label className="field">
             Branch to analyze
-            <input className="input" onChange={(event) => setBranch(event.target.value)} required value={branch} />
+            <input className="input" maxLength={255} onChange={(event) => setBranch(event.target.value)} required value={branch} />
           </label>
           {error && <div className="notice notice-error" role="alert">{error}</div>}
           <div className="dialog-actions">

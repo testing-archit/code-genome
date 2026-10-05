@@ -78,7 +78,9 @@ function RiskView() {
           </Panel>
         )}
         <Panel title="Impact radius" description="One hop through observed imports and repeated co-change." flush>
-          {!selected ? <Empty title="Pick a file">Choose a ranked file to see what it touches.</Empty> : impact.loading ? <Loading rows={4} /> : impact.data?.impacted.length ? (
+          {!selected ? <Empty title="Pick a file">Choose a ranked file to see what it touches.</Empty> : impact.loading ? <Loading rows={4} /> : impact.error ? (
+            <div className="panel-body"><Notice tone="error" title="Impact could not be computed">{impact.error} <button className="link-button" onClick={impact.reload} type="button">Try again</button></Notice></div>
+          ) : impact.data?.impacted.length ? (
             <div className="list">
               {impact.data.impacted.slice(0, 12).map((item) => (
                 <div className="list-row" key={item.path} style={{ alignItems: "flex-start" }}>

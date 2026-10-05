@@ -59,3 +59,5 @@ export const PlayIcon = (p: IconProps) => <Icon {...p}><path d="M8 5.5v13l10.5-6
 export const ModelsIcon = (p: IconProps) => <Icon {...p}><circle cx="5" cy="6" r="1.8" /><circle cx="5" cy="18" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="7" r="1.8" /><circle cx="19" cy="17" r="1.8" /><path d="M6.6 6.9 10.4 11M6.6 17.1l3.8-4.1M13.7 11.2l3.6-3.2M13.7 12.8l3.6 3.2" /></Icon>;
 export const DiffIcon = (p: IconProps) => <Icon {...p}><path d="M7 4v10M2 9h10M5 19h10" /><path d="M16 4h4v4M20 4l-6 6" /></Icon>;
 export const CompareIcon = (p: IconProps) => <Icon {...p}><rect height="14" rx="1.5" width="6" x="3" y="5" /><rect height="14" rx="1.5" width="6" x="15" y="5" /><path d="M10.5 9h3M12.5 7.5 14 9l-1.5 1.5M13.5 15h-3M11.5 13.5 10 15l1.5 1.5" /></Icon>;
+export const DocIcon = (p: IconProps) => <Icon {...p}><path d="M7 3.5h7l4 4V20.5H7z" /><path d="M14 3.5v4h4M10 12h5M10 15.5h5" /></Icon>;
+export const HotspotIcon = (p: IconProps) => <Icon {...p}><circle cx="12" cy="12" r="2.5" /><circle cx="12" cy="12" r="6" /><path d="M12 3v2M12 19v2M3 12h2M19 12h2" /></Icon>;

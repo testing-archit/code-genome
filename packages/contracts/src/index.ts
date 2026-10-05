@@ -408,7 +408,7 @@ export type SearchResults = {
   model_version: string;
   hits: Array<{
     id: string;
-    kind: "file" | "module" | "hotspot" | "commit";
+    kind: "file" | "module" | "hotspot" | "commit" | "doc" | "code";
     title: string;
     path: string | null;
     score: number;
@@ -522,4 +522,66 @@ export type RepositoryAutomation = {
   webhook_configured: boolean;
   webhook_path: string;
   events: string[];
+};
+
+export type HealthBand = "Healthy" | "Moderate" | "At risk";
+
+export type RepositoryOverview = {
+  repository_id: string;
+  snapshot_sha: string;
+  analysis_version: string;
+  summary: string | null;
+  summary_evidence_id: string | null;
+  health: {
+    score: number;
+    band: HealthBand;
+    version: string;
+    components: Array<{ key: string; label: string; score: number; maximum: number; value: string; detail: string }>;
+  };
+  counts: {
+    files: number;
+    source_files: number;
+    commits: number;
+    contributors: number;
+    modules: number;
+    internal_imports: number;
+    external_packages: number;
+    documents: number;
+  };
+  high_risk_modules: Array<{ name: string; risk: number; files: number; riskiest: string[]; inferred: boolean }>;
+  riskiest_files: Array<{ path: string; score: number; rationale: string; evidence_ids: string[] }>;
+  contributors: Array<{ name: string; commits: number }>;
+  risk_model: string;
+  limitations: string[];
+};
+
+export type ComponentNode = {
+  name: string;
+  files: number;
+  risk: number | null;
+  fan_in: number;
+  fan_out: number;
+  externals: string[];
+  inferred: boolean;
+  description: string;
+  riskiest: string[];
+  paths: string[];
+};
+
+export type ComponentLink = { source: string; target: string; imports: number; co_changes: number; evidence_ids: string[] };
+
+export type ModuleGraph = {
+  repository_id: string;
+  snapshot_sha: string;
+  nodes: ComponentNode[];
+  links: ComponentLink[];
+  limitations: string[];
+};
+
+export type GeneratedDocuments = {
+  repository_id: string;
+  snapshot_sha: string;
+  version: string;
+  generated_at: string;
+  documents: Array<{ name: string; description: string; markdown: string }>;
 };

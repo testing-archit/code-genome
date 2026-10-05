@@ -12,13 +12,16 @@ import type {
   ExportFormat,
   ExportKind,
   GroundedAnswer,
+  GeneratedDocuments,
   GraphProjection,
   ImpactAnalysis,
   MlOverview,
+  ModuleGraph,
   ProblemDetail,
   Repository,
   RepositoryAutomation,
   RepositoryConnection,
+  RepositoryOverview,
   RepositoryInventory,
   RiskAnalysis,
   SearchResults,
@@ -93,7 +96,8 @@ function saveBlob(blob: Blob, filename: string) {
   link.href = url;
   link.download = filename;
   link.click();
-  URL.revokeObjectURL(url);
+  // Revoking synchronously can cancel the download in Safari and older Firefox.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 type FieldError = { location?: Array<string | number>; message?: string };
@@ -180,6 +184,13 @@ export const api = {
     const disposition = response.headers.get("Content-Disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${kind}.${format}`;
     saveBlob(await response.blob(), filename);
+  },
+  getOverview: (repositoryId: string) => request<RepositoryOverview>(`/repositories/${repositoryId}/overview`),
+  getModuleGraph: (repositoryId: string) => request<ModuleGraph>(`/repositories/${repositoryId}/module-graph`),
+  getDocs: (repositoryId: string) => request<GeneratedDocuments>(`/repositories/${repositoryId}/docs`),
+  downloadDoc: async (repositoryId: string, name: string) => {
+    const response = await send(`/repositories/${repositoryId}/docs/${encodeURIComponent(name)}/download`);
+    saveBlob(await response.blob(), name);
   },
   getAutomation: (repositoryId: string) =>
     request<RepositoryAutomation>(`/repositories/${repositoryId}/automation`),

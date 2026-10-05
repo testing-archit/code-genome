@@ -1,7 +1,8 @@
 "use client";
 
 import type { ChangeImpact, ChangeKind } from "@code-genome/contracts";
-import { FormEvent, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useRef, useState } from "react";
 
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Meter, Notice, Panel } from "../../../../components/ui";
@@ -25,16 +26,20 @@ const example = `diff --git a/src/api/client.ts b/src/api/client.ts
 
 export default function ChangePage() {
   return (
-    <RequiresSnapshot what="Change check">
-      <ChangeView />
+    <RequiresSnapshot what="Change impact">
+      <Suspense fallback={null}>
+        <ChangeView />
+      </Suspense>
     </RequiresSnapshot>
   );
 }
 
 function ChangeView() {
   const { repository } = useRepo();
+  const params = useSearchParams();
+  const requestedPath = params.get("path");
   const [diff, setDiff] = useState("");
-  const [paths, setPaths] = useState("");
+  const [paths, setPaths] = useState(requestedPath ?? "");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChangeImpact | null>(null);
@@ -48,12 +53,11 @@ function ChangeView() {
         : null;
   const canSubmit = !working && !tooLarge && (diff.trim().length > 0 || listedPaths.length > 0);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function run(diffText: string, pathList: string[]) {
     setWorking(true);
     setError(null);
     try {
-      setResult(await api.checkChange(repository.id, diff, listedPaths));
+      setResult(await api.checkChange(repository.id, diffText, pathList));
     } catch (caught) {
       setError(errorMessage(caught, "The change could not be checked."));
     } finally {
@@ -61,9 +65,24 @@ function ChangeView() {
     }
   }
 
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run(diff, listedPaths);
+  }
+
+  // Arriving from "What will break if I change this file?" runs the check straight away.
+  const ranFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestedPath || ranFor.current === requestedPath) return;
+    ranFor.current = requestedPath;
+    setPaths(requestedPath);
+    void run("", [requestedPath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedPath]);
+
   return (
     <div className="split" style={{ gridTemplateColumns: "minmax(0, 0.85fr) minmax(0, 1.35fr)" }}>
-      <Panel title="Check a proposed change" description="Paste a diff or list the files a pull request touches. Nothing is stored.">
+      <Panel title="What will break?" description="Name a file, list the files a pull request touches, or paste a diff. Nothing is stored.">
         <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
           <label className="field">
             Unified diff
@@ -79,7 +98,7 @@ function ChangeView() {
             <small>Output of <code>git diff main...my-branch</code>, or a pull request&apos;s <code>.diff</code>. Up to 200 files.</small>
           </label>
           <label className="field">
-            Or file paths, one per line
+            Files you plan to change, one per line
             <textarea className="textarea" onChange={(event) => setPaths(event.target.value)} placeholder="src/billing/invoice.ts" rows={4} spellCheck={false} value={paths} />
           </label>
           {tooLarge && <Notice tone="warn">{tooLarge}</Notice>}
@@ -102,8 +121,29 @@ function ChangeView() {
 
 function ChangeResult({ result }: { result: ChangeImpact }) {
   const { summary } = result;
+  const lead = result.changed[0];
+  const band = (score: number) => (score >= 0.6 ? "High" : score >= 0.3 ? "Medium" : "Low");
   return (
     <>
+      {lead && (
+        <div className="impact-lead" data-tone={lead.risk_score === null ? "none" : band(lead.risk_score).toLowerCase()}>
+          <div style={{ minWidth: 0 }}>
+            <span className="muted small">{result.changed.length === 1 ? "Changing" : `Changing ${result.changed.length} files, riskiest first`}</span>
+            <code className="impact-lead-path">{lead.path}</code>
+            {!lead.in_snapshot && <small className="muted">Not in the analysed snapshot. If you meant another file, check the spelling or pick one from the overview.</small>}
+          </div>
+          {lead.risk_score !== null && (
+            <div className="impact-lead-risk">
+              <strong>{Math.round(lead.risk_score * 100)}%</strong>
+              <span>{band(lead.risk_score)} regression risk</span>
+            </div>
+          )}
+          <div className="impact-lead-risk">
+            <strong>{summary.impacted_files}</strong>
+            <span>{summary.impacted_files === 1 ? "file may be affected" : "files may be affected"}</span>
+          </div>
+        </div>
+      )}
       <div className="stats" aria-label="Change summary">
         <div className="stat"><strong>{summary.changed_files}</strong><span>files changed ({summary.changed_in_snapshot} known)</span></div>
         <div className="stat"><strong>{summary.impacted_files}</strong><span>may be affected</span></div>

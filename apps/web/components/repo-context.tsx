@@ -9,7 +9,7 @@ import { api, errorMessage } from "../lib/api";
 import { formatTime, repoName, shortSha } from "../lib/format";
 import { invalidate, Resource, useResource } from "../lib/use-resource";
 import { CloseIcon, HelixMark } from "./icons";
-import { repoSections, TopBar } from "./shell";
+import { sectionFor, TopBar } from "./shell";
 import { Empty, Notice } from "./ui";
 import { useWorkspace } from "./workspace";
 
@@ -29,6 +29,10 @@ type RepoValue = {
   trainModels: () => Promise<void>;
   training: boolean;
   openEvidence: (evidenceId: string) => void;
+  /** Set when the run list failed to load; views must not claim "not analyzed" then. */
+  runsError: string | null;
+  runsLoaded: boolean;
+  retryRuns: () => void;
 };
 
 const RepoContext = createContext<RepoValue | null>(null);
@@ -48,12 +52,18 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
   const [evidenceId, setEvidenceId] = useState<string | null>(null);
   const [training, setTraining] = useState(false);
 
+  const [runsAttempt, setRunsAttempt] = useState(0);
+  const [runsLoaded, setRunsLoaded] = useState(false);
+  const retryRuns = useCallback(() => setRunsAttempt((value) => value + 1), []);
   useEffect(() => {
     let active = true;
     api
       .listAnalyses(repositoryId)
       .then((items) => {
-        if (active) setRuns(items);
+        if (!active) return;
+        setRuns(items);
+        setRunsError(null);
+        setRunsLoaded(true);
       })
       .catch((caught: unknown) => {
         if (active) setRunsError(errorMessage(caught, "Analysis history could not be loaded."));
@@ -61,7 +71,7 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
     return () => {
       active = false;
     };
-  }, [repositoryId]);
+  }, [repositoryId, runsAttempt]);
 
   const latestRun = runs[0] ?? null;
   const published = runs.find((run) => run.state === "SUCCEEDED" && run.snapshot_sha) ?? null;
@@ -144,9 +154,9 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
   const value = useMemo<RepoValue | null>(
     () =>
       repository
-        ? { repository, runs, latestRun, published, startAnalysis, starting, inventory, architecture, models, trainModels, training, openEvidence: setEvidenceId }
+        ? { repository, runs, latestRun, published, startAnalysis, starting, inventory, architecture, models, trainModels, training, openEvidence: setEvidenceId, runsError, runsLoaded, retryRuns }
         : null,
-    [repository, runs, latestRun, published, startAnalysis, starting, inventory, architecture, models, trainModels, training],
+    [repository, runs, latestRun, published, startAnalysis, starting, inventory, architecture, models, trainModels, training, runsError, runsLoaded, retryRuns],
   );
 
   if (!value) {
@@ -177,33 +187,39 @@ export function RepoProvider({ repositoryId, children }: { repositoryId: string;
 }
 
 function RepoFrame({ children, runsError }: { children: React.ReactNode; runsError: string | null }) {
-  const { repository, latestRun, published } = useRepo();
+  const { repository, latestRun, published, retryRuns, inventory, architecture, models } = useRepo();
   const pathname = usePathname();
   const base = `/r/${repository.id}`;
   const { owner, name } = repoName(repository.external_id);
   const running = latestRun && !terminal.has(latestRun.state);
+  const section = sectionFor(pathname, repository.id);
 
   return (
     <>
       <TopBar
-        title={name}
-        detail={<>{owner} · <code>{repository.default_branch}</code>{published && <> · snapshot <code>{shortSha(published.snapshot_sha, 8)}</code></>}</>}
+        title={<Link className="topbar-repo" href={base}>{name}</Link>}
+        detail={
+          <>
+            {section.group ? `${section.group} / ${section.label}` : `${owner}/${name}`}
+            {" "}on <code>{repository.default_branch}</code>
+            {published && <> at <code>{shortSha(published.snapshot_sha, 8)}</code></>}
+          </>
+        }
         actions={running ? <span className="badge badge-warn">Analyzing {Math.round((latestRun?.progress ?? 0) * 100)}%</span> : null}
       />
-      <nav aria-label="Repository views" className="tabs">
-        {repoSections.map((section) => {
-          const href = section.slug ? `${base}/${section.slug}` : base;
-          const current = section.slug ? pathname.startsWith(href) : pathname === base;
-          const Icon = section.icon;
-          return (
-            <Link aria-current={current ? "page" : undefined} className="tab" href={href} key={section.slug}>
-              <Icon size={16} />{section.label}
-            </Link>
-          );
-        })}
-      </nav>
       <div className="content">
-        {runsError && <Notice tone="error" title="Analysis history is unavailable">{runsError}</Notice>}
+        {runsError && (
+          <Notice tone="error" title="Analysis history could not be loaded">
+            {runsError}{" "}
+            <button className="link-button" onClick={retryRuns} type="button">Try again</button>
+          </Notice>
+        )}
+        {[inventory, architecture, models].some((resource) => resource.error) && (
+          <Notice tone="error" title="Some repository data could not be loaded">
+            {[inventory, architecture, models].find((resource) => resource.error)?.error}{" "}
+            <button className="link-button" onClick={() => [inventory, architecture, models].forEach((resource) => resource.error && resource.reload())} type="button">Try again</button>
+          </Notice>
+        )}
         {children}
       </div>
     </>
@@ -212,8 +228,10 @@ function RepoFrame({ children, runsError }: { children: React.ReactNode; runsErr
 
 /** Wraps a view that needs a published snapshot and explains how to get one when missing. */
 export function RequiresSnapshot({ children, what }: { children: React.ReactNode; what: string }) {
-  const { published, latestRun, startAnalysis, starting } = useRepo();
+  const { published, latestRun, startAnalysis, starting, runsError, runsLoaded } = useRepo();
   if (published) return <>{children}</>;
+  if (runsError) return null; // The frame already shows the error with a retry.
+  if (!runsLoaded) return <div className="panel"><div className="skeleton" style={{ height: 160 }} /></div>;
   const running = latestRun && !terminal.has(latestRun.state);
   return (
     <div className="panel">
@@ -314,6 +332,23 @@ function EvidenceDrawer({ evidenceId, onClose }: { evidenceId: string; onClose: 
         {hotspot && <><dt>Commits</dt><dd>{hotspot.commit_count}</dd><dt>Churn</dt><dd>{hotspot.churn} lines</dd><dt>Score</dt><dd>{Math.round(hotspot.score * 100)} relative</dd></>}
       </dl>
     );
+  } else if (kind === "change") {
+    const separator = value.indexOf(":");
+    const sha = separator === -1 ? value : value.slice(0, separator);
+    const path = separator === -1 ? "" : value.slice(separator + 1);
+    const commit = inventory.data?.commits.find((item) => item.sha === sha);
+    body = (
+      <>
+        <dl className="kv">
+          <dt>Changed file</dt><dd><code>{path || "unknown"}</code></dd>
+          <dt>Commit</dt><dd><code>{sha}</code></dd>
+          {commit && <><dt>Message</dt><dd style={{ whiteSpace: "pre-wrap" }}>{commit.message.split("\n")[0]}</dd><dt>Author</dt><dd>{commit.author_name}, {formatTime(commit.authored_at)}</dd></>}
+        </dl>
+        <a className="button button-secondary" href={`${repository.clone_url.replace(/\.git$/, "")}/commit/${encodeURIComponent(sha)}`} rel="noreferrer" target="_blank">Open the commit on GitHub</a>
+      </>
+    );
+  } else if (!isProvenance) {
+    body = <dl className="kv"><dt>Reference</dt><dd><code>{evidenceId}</code></dd><dt>Note</dt><dd>This kind of evidence has no detail view yet.</dd></dl>;
   } else if (error) {
     body = <Notice tone="error" title="Evidence unavailable">{error}</Notice>;
   } else if (!evidence) {
@@ -384,6 +419,7 @@ function chipLabel(id: string): string {
   const value = rest.join(":");
   if (kind === "commit") return `commit ${value.slice(0, 8)}`;
   if (kind === "hotspot") return value.split("/").slice(-2).join("/");
+  if (kind === "change") return `change ${value.slice(0, 8)} ${value.split("/").pop() ?? ""}`.trim();
   if (kind === "module") return `module ${value.slice(0, 14)}`;
   if (kind === "evidence") return `source ${value.slice(0, 12)}`;
   if (kind === "file") return value.split("/").slice(-2).join("/");

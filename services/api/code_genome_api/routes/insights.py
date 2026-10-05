@@ -22,6 +22,7 @@ from ..schemas import (
     RepositoryOverviewResponse,
 )
 from ..services import insights
+from ..services.knowledge import classify
 from .intelligence import _repository, _snapshot, get_risk
 
 router = APIRouter(tags=["insights"])
@@ -61,7 +62,12 @@ def get_overview(repository_id: str, db: Database, actor: Actor) -> RepositoryOv
     documents = {
         item.path for item in facts.chunks if PurePosixPath(item.path).suffix.lower() == ".md"
     }
-    ranked = sorted(facts.risk.items(), key=lambda item: -item[1].score)[:6]
+    # The overview links each file to "what will break"; that question is about code, so
+    # README, lock, and config files that merely change often are left to the Risk view.
+    ranked = sorted(
+        (item for item in facts.risk.items() if classify(item[0]) == "source"),
+        key=lambda item: -item[1].score,
+    )[:6]
     return RepositoryOverviewResponse(
         repository_id=repository_id,
         snapshot_sha=facts.snapshot.commit_sha,
