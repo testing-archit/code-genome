@@ -985,8 +985,12 @@ def run_structural_analysis(
                 f"Derived {len(evolution.co_changes)} co-change edges and "
                 f"{len(evolution.modules)} inferred modules.",
                 f"Skipped {len(source_snapshot.skipped_oversized_files)} oversized source files.",
-                f"Stored {chunk_count} cited knowledge chunks from {len(knowledge_files)} "
-                "docs, manifests, and source files.",
+                (
+                    f"Stored {chunk_count} cited knowledge chunks from {len(knowledge_files)} "
+                    "docs, manifests, and source files."
+                    if chunk_count
+                    else "Kept the snapshot's existing knowledge chunks."
+                ),
                 f"Traced {bug_count} candidate bug-introducing links from "
                 f"{len(szz.fix_shas)} fix commits ({szz.analysis_version}; heuristic).",
                 *szz.limitations,
