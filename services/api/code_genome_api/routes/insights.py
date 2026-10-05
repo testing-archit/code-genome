@@ -172,7 +172,8 @@ def get_module_graph(repository_id: str, db: Database, actor: Actor) -> ModuleGr
         links=[ModuleLinkResponse(**vars(link)) for link in links],
         limitations=[
             "Modules are inferred from directory structure and co-change history.",
-            "Links aggregate observed JS/TS and Python imports and repeated co-change between modules.",
+            "Links aggregate observed JS/TS and Python imports and repeated co-change between "
+            "modules.",
         ],
     )
 
