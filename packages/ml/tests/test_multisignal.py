@@ -1,8 +1,10 @@
 """Multi-signal module discovery, richer defect features, and weighted impact ranking."""
 
 import random
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from code_genome_ml import (
     ChangeRecord,
@@ -77,18 +79,20 @@ def test_module_discovery_compares_algorithms_and_keeps_old_keys() -> None:
         "directory_groups",
     ):
         assert key in metrics
-    assert set(metrics["algorithms"]) == set(ALGORITHMS)  # type: ignore[arg-type]
+    assert set(metrics["algorithms"]) == set(ALGORITHMS)
     assert metrics["champion"] in ALGORITHMS
-    for scores in metrics["algorithms"].values():  # type: ignore[attr-defined]
-        assert {"silhouette", "davies_bouldin", "modularity", "heldout_lift"} <= set(scores)
-    assert metrics["algorithms"]["kmeans"]["parameters"]["k"] >= 2  # type: ignore[index]
-    assert "eps" in metrics["algorithms"]["dbscan"]["parameters"]  # type: ignore[index]
-    assert set(metrics["ablation"]) == {  # type: ignore[arg-type]
+    for scores in metrics["algorithms"].values():
+        assert {"silhouette", "davies_bouldin", "modularity", "heldout_lift"} <= set(
+            cast("Iterable[str]", scores)
+        )
+    assert metrics["algorithms"]["kmeans"]["parameters"]["k"] >= 2
+    assert "eps" in metrics["algorithms"]["dbscan"]["parameters"]
+    assert set(metrics["ablation"]) == {
         "structure_only",
         "structure_cochange",
         "all_signals",
     }
-    assert metrics["modularity_learned"] > 0.3  # type: ignore[operator]
+    assert metrics["modularity_learned"] > 0.3
     assert len(result.modules) >= 4
     assert result.projection_method == "pca"
     assert len(result.projection) == metrics["clustered_files"]
@@ -101,12 +105,12 @@ def test_history_signals_find_feature_modules_that_directories_and_structure_mis
     result = _discover(layered_repository())
     assert result.status == "trained"
     metrics = result.metrics
-    champion = metrics["algorithms"][metrics["champion"]]  # type: ignore[index]
+    champion = metrics["algorithms"][metrics["champion"]]
     directory = metrics["directory_baseline"]
     # Directories group by layer; the learned modules follow features and keep later
     # co-changes together far more often.
-    assert champion["heldout_lift"] > directory["heldout_lift"]  # type: ignore[index]
-    assert metrics["beats_directory_baseline"]["heldout_lift"] is True  # type: ignore[index]
+    assert champion["heldout_lift"] > directory["heldout_lift"]
+    assert metrics["beats_directory_baseline"]["heldout_lift"] is True
     features = {
         frozenset(path.rsplit("/", 1)[1].split(".")[0] for path in module.files)
         for module in result.modules
@@ -114,11 +118,8 @@ def test_history_signals_find_feature_modules_that_directories_and_structure_mis
     assert sum(1 for names in features if len(names) == 1) >= 3
     ablation = metrics["ablation"]
     # Without imports, structure alone cannot separate anything.
-    assert ablation["structure_only"]["clusters"] <= 1  # type: ignore[index]
-    assert (
-        ablation["all_signals"]["heldout_lift"]  # type: ignore[index]
-        > ablation["structure_only"]["heldout_lift"]  # type: ignore[index]
-    )
+    assert ablation["structure_only"]["clusters"] <= 1
+    assert ablation["all_signals"]["heldout_lift"] > ablation["structure_only"]["heldout_lift"]
 
 
 def test_champion_rule_excludes_degenerate_clusterings() -> None:
@@ -173,12 +174,14 @@ def test_defect_model_adds_graph_ownership_and_code_metric_features() -> None:
     assert without.status == "trained"
     assert without.model_version == "defect-temporal@3"
     features = without.dataset["features"]
-    assert {"betweenness", "pagerank", "ownership"} <= set(features)  # type: ignore[arg-type]
-    assert not {"log_loc", "log_complexity", "log_functions"} & set(features)  # type: ignore[arg-type]
+    assert {"betweenness", "pagerank", "ownership"} <= set(cast("Iterable[str]", features))
+    assert not {"log_loc", "log_complexity", "log_functions"} & set(cast("Iterable[str]", features))
     assert without.dataset["code_metrics"]["missing"] == ["loc", "complexity", "functions"]  # type: ignore[index]
     for name in ("logistic_regression", "random_forest", "gradient_boosting", "heuristic_baseline"):
         scores = without.metrics[name]
-        assert {"precision", "recall", "f1", "roc_auc", "average_precision"} <= set(scores)  # type: ignore[arg-type]
+        assert {"precision", "recall", "f1", "roc_auc", "average_precision"} <= set(
+            cast("Iterable[str]", scores)
+        )
     assert "decision_rule" in without.metrics
     ownership = without.predictions[0].features["ownership"]
     assert 0 < ownership <= 1
@@ -192,7 +195,7 @@ def test_defect_model_adds_graph_ownership_and_code_metric_features() -> None:
         inputs.commits, inputs.changes, fix_shas, measured, inputs.imports
     )
     assert enriched.status == "trained"
-    assert {"log_loc", "log_complexity"} <= set(enriched.dataset["features"])  # type: ignore[arg-type]
+    assert {"log_loc", "log_complexity"} <= set(cast("Iterable[str]", enriched.dataset["features"]))
     assert "log_functions" not in enriched.dataset["features"]  # type: ignore[operator]
     code = enriched.dataset["code_metrics"]
     assert code["used"] == ["loc", "complexity"]  # type: ignore[index]
@@ -261,7 +264,7 @@ def test_impact_ranking_evaluation_compares_four_approaches() -> None:
     result = evaluate_impact_ranking(inputs.changes, inputs.imports, fix_shas, len(inputs.files))
     assert result["status"] == "evaluated"
     approaches = result["approaches"]
-    assert set(approaches) == {  # type: ignore[arg-type]
+    assert set(cast("Iterable[str]", approaches)) == {
         "static_dependency",
         "co_change",
         "weighted",
@@ -269,13 +272,13 @@ def test_impact_ranking_evaluation_compares_four_approaches() -> None:
         "learned_weights",
     }
     for scores in approaches.values():  # type: ignore[attr-defined]
-        assert set(scores) == {
+        assert set(cast("Iterable[str]", scores)) == {
             f"{metric}_at_{k}" for metric in ("precision", "recall", "map") for k in (5, 10)
         }
         assert all(0.0 <= value <= 1.0 for value in scores.values())
     assert result["queries"] >= 10  # type: ignore[operator]
     assert approaches["weighted"]["map_at_10"] >= approaches["static_dependency"]["map_at_10"]  # type: ignore[index]
-    assert set(result["learned_component_weights"]) == {  # type: ignore[arg-type]
+    assert set(cast("Iterable[str]", result["learned_component_weights"])) == {
         "dependency",
         "co_change",
         "proximity",

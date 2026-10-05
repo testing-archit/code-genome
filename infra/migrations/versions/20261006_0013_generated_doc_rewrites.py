@@ -38,9 +38,7 @@ def upgrade() -> None:
         ),
     )
     for column in ("workspace_id", "repository_id", "snapshot_id"):
-        op.create_index(
-            f"ix_generated_doc_rewrites_{column}", "generated_doc_rewrites", [column]
-        )
+        op.create_index(f"ix_generated_doc_rewrites_{column}", "generated_doc_rewrites", [column])
 
 
 def downgrade() -> None:

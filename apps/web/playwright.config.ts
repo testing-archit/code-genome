@@ -13,7 +13,8 @@ export default defineConfig({
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: `http://localhost:${port}`,
-    channel: process.env.PLAYWRIGHT_CHANNEL ?? "chrome",
+    // Locally use the installed Chrome; PLAYWRIGHT_CHANNEL="" (CI) uses the bundled Chromium.
+    channel: process.env.PLAYWRIGHT_CHANNEL === undefined ? "chrome" : process.env.PLAYWRIGHT_CHANNEL || undefined,
     trace: "retain-on-failure",
   },
   webServer: {

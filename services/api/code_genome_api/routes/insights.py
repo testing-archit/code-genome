@@ -89,7 +89,7 @@ def get_overview(repository_id: str, db: Database, actor: Actor) -> RepositoryOv
         summary_evidence_id=intro[1] if intro else None,
         health=RepositoryHealthResponse(
             score=score,
-            band=band,  # type: ignore[arg-type]
+            band=band,
             version=insights.HEALTH_VERSION,
             components=[HealthComponentResponse(**vars(item)) for item in components],
         ),

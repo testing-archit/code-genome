@@ -1,5 +1,6 @@
 import random
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from code_genome_ml import (
     ChangeRecord,
@@ -122,7 +123,7 @@ def test_defect_model_learns_from_history_and_explains_predictions() -> None:
     )
     assert result.status == "trained"
     assert result.champion in {"logistic_regression", "random_forest", "gradient_boosting"}
-    champion = result.metrics[result.champion]  # type: ignore[index]
+    champion = cast("dict[str, float]", result.metrics[str(result.champion)])
     assert champion["roc_auc"] >= 0.75
     top = {item.path for item in result.predictions[:4]}
     assert len(top & BUGGY) >= 3

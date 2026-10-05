@@ -16,6 +16,7 @@ never indexed during evaluation, so there is no leakage.
 
 import math
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -173,7 +174,7 @@ def evaluate_retrieval(
     return results
 
 
-def select_mode(results: dict[str, object]) -> str:
+def select_mode(results: Mapping[str, object]) -> str:
     """Champion ranking mode for this repository: best recall@10, then MRR.
 
     Hybrid is kept unless another mode beats it by more than 0.01, because fusion is

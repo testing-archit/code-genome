@@ -36,6 +36,40 @@ jobs:
           CODE_GENOME_DATABASE_URL=sqlite:///./migration_check.db uv run alembic upgrade head
       - run: uv run pip-audit
 
+  postgres:
+    name: Migrations and API tests on Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: code_genome
+          POSTGRES_PASSWORD: code_genome
+          POSTGRES_DB: code_genome
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U code_genome"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PG_URL: postgresql+psycopg://code_genome:code_genome@localhost:5432/code_genome
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - name: Migrations upgrade, rollback, and upgrade on Postgres
+        run: |
+          CODE_GENOME_DATABASE_URL=$PG_URL uv run alembic upgrade head
+          CODE_GENOME_DATABASE_URL=$PG_URL uv run alembic downgrade base
+          CODE_GENOME_DATABASE_URL=$PG_URL uv run alembic upgrade head
+          CODE_GENOME_DATABASE_URL=$PG_URL uv run alembic downgrade base
+      - name: API tests on Postgres (foreign keys and UTC are enforced here, unlike SQLite)
+        run: CODE_GENOME_TEST_DATABASE_URL=$PG_URL uv run pytest services/api/tests
+
   web:
     name: Web application
     runs-on: ubuntu-latest
@@ -48,5 +82,18 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high
+      - name: End-to-end tests (mocked API, bundled Chromium)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e --workspace @code-genome/web
+        env:
+          PLAYWRIGHT_CHANNEL: ""
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7
