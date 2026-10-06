@@ -29,7 +29,7 @@ from ..schemas import (
     RepositoryOverviewResponse,
     UnstableComponentResponse,
 )
-from ..services import doc_rewrite, insights, ml
+from ..services import doc_rewrite, insights, ml, ownership
 from ..services.gemini import GeminiProviderError, rewrite_document_markdown
 from ..services.knowledge import classify
 from .intelligence import _repository, _snapshot, get_risk
@@ -165,15 +165,22 @@ def get_overview(repository_id: str, db: Database, actor: Actor) -> RepositoryOv
 def get_module_graph(repository_id: str, db: Database, actor: Actor) -> ModuleGraphResponse:
     facts = _facts(db, repository_id, actor)
     nodes, links = insights.module_graph(facts)
+    history = ownership.load_history(db, facts.snapshot)
+    factors: dict[str, int | None] = {}
+    for node in nodes:
+        measured = ownership.bus_factor(history, node.paths)
+        factors[node.name] = measured[0] if measured else None
     return ModuleGraphResponse(
         repository_id=repository_id,
         snapshot_sha=facts.snapshot.commit_sha,
-        nodes=[ModuleNodeResponse(**vars(node)) for node in nodes],
+        nodes=[ModuleNodeResponse(**vars(node), bus_factor=factors[node.name]) for node in nodes],
         links=[ModuleLinkResponse(**vars(link)) for link in links],
         limitations=[
             "Modules are inferred from directory structure and co-change history.",
             "Links aggregate observed JS/TS and Python imports and repeated co-change between "
             "modules.",
+            "Bus factor is the smallest number of people who made half of a component's "
+            "commits (bots and bulk commits excluded); it signals concentrated knowledge.",
         ],
     )
 

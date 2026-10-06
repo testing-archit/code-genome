@@ -7,7 +7,7 @@ import { FormEvent, Suspense, useEffect, useRef, useState } from "react";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Meter, Notice, Panel } from "../../../../components/ui";
 import { api, errorMessage } from "../../../../lib/api";
-import { shortSha } from "../../../../lib/format";
+import { relativeTime, shortSha } from "../../../../lib/format";
 
 const changeBadge: Record<ChangeKind, string> = {
   added: "badge-ok",
@@ -195,6 +195,26 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
           </div>
         )}
       </Panel>
+
+      {result.reviewers && result.reviewers.length > 0 && (
+        <Panel title="Suggested reviewers" description="People who recently changed the affected files. Recent commits count more; bots and bulk commits are left out. Git identities as recorded, not verified." flush>
+          <div className="list">
+            {result.reviewers.map((person) => (
+              <div className="list-row" key={person.name} style={{ alignItems: "flex-start" }}>
+                <div className="grow" style={{ display: "grid", gap: 4 }}>
+                  <strong>{person.name}</strong>
+                  <small>
+                    {person.commits} commit{person.commits === 1 ? "" : "s"} on {person.files.length} affected file{person.files.length === 1 ? "" : "s"}
+                    {person.last_commit ? ` · last ${relativeTime(person.last_commit)}` : ""}
+                  </small>
+                  <small className="truncate">{person.files.slice(0, 4).join(", ")}{person.files.length > 4 ? ` +${person.files.length - 4}` : ""}</small>
+                  <EvidenceChips ids={person.evidence_ids} limit={3} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       {result.modules.length > 0 && (
         <Panel title="Modules touched" description="Module boundaries are inferred." flush>

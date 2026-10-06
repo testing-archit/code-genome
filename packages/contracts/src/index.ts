@@ -466,6 +466,8 @@ export type ChangeImpact = {
     graph_metrics?: ImpactGraphMetrics | null;
   }>;
   modules: Array<{ name: string; changed_files: number; impacted_files: number; inferred: boolean }>;
+  /** People who recently changed the affected files (ownership@1); Git identities as recorded. */
+  reviewers?: Array<{ name: string; commits: number; files: string[]; score: number; last_commit: string | null; evidence_ids: string[] }>;
   limitations: string[];
 };
 
@@ -933,6 +935,8 @@ export type ComponentNodeExtras = {
   commits?: number;
   bug_fixes?: number;
   last_changed?: string | null;
+  /** Smallest number of people who made half of the component's commits; null if quiet. */
+  bus_factor?: number | null;
 };
 
 export type GenomeNodeKind =

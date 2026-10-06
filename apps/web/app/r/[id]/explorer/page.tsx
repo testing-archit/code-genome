@@ -126,6 +126,17 @@ function Details({ graph, node, onClose }: { graph: ModuleGraph; node: Node; onC
               {node.commits !== undefined && <><dt>Commits</dt><dd>{node.commits}</dd></>}
               {node.bug_fixes !== undefined && <><dt>Bug-fix commits</dt><dd>{node.bug_fixes} <span className="muted small">(keyword rule, merges excluded)</span></dd></>}
               {node.last_changed && <><dt>Last changed</dt><dd title={formatTime(node.last_changed)}>{relativeTime(node.last_changed)}</dd></>}
+              {node.bus_factor != null && (
+                <>
+                  <dt>Bus factor</dt>
+                  <dd>
+                    <span className={`badge ${node.bus_factor === 1 ? "badge-warn" : ""}`}>{node.bus_factor}</span>{" "}
+                    <span className="muted small">
+                      {node.bus_factor === 1 ? "one person made half of its commits: knowledge is concentrated" : `${node.bus_factor} people made half of its commits`}
+                    </span>
+                  </dd>
+                </>
+              )}
             </dl>
             {node.contributors && node.contributors.length > 0 && (
               <div style={{ marginTop: 10, display: "grid", gap: 4 }}>

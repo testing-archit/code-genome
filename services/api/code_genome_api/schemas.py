@@ -599,6 +599,17 @@ class ChangeImpactSummary(BaseModel):
     high_risk_files: int
 
 
+class SuggestedReviewerResponse(BaseModel):
+    """Someone who recently changed the affected files (ownership@1). Git identity as recorded."""
+
+    name: str
+    commits: int
+    files: list[str]
+    score: float
+    last_commit: datetime | None
+    evidence_ids: list[str]
+
+
 class ChangeImpactResponse(BaseModel):
     repository_id: str
     snapshot_id: str
@@ -610,6 +621,7 @@ class ChangeImpactResponse(BaseModel):
     impacted: list[ChangeImpactItemResponse]
     modules: list[ChangeModuleResponse]
     limitations: list[str]
+    reviewers: list[SuggestedReviewerResponse] = Field(default_factory=list)
 
 
 class SnapshotSummaryResponse(BaseModel):
@@ -838,6 +850,9 @@ class ModuleNodeResponse(BaseModel):
     commits: int = 0
     bug_fixes: int = 0
     last_changed: datetime | None = None
+    # Smallest number of people who made >= 50% of the component's commits (ownership@1);
+    # null when the component has too little history.
+    bus_factor: int | None = None
 
 
 class ModuleLinkResponse(BaseModel):

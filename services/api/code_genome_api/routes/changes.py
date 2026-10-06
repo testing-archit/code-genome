@@ -11,7 +11,9 @@ from ..schemas import (
     ChangeImpactResponse,
     ChangeImpactSummary,
     ChangeModuleResponse,
+    SuggestedReviewerResponse,
 )
+from ..services import ownership
 from ..services.diffs import DiffError, FileDiff, parse_unified_diff
 from ..services.impact import impact_for_paths
 from .intelligence import _repository, _snapshot, get_risk
@@ -177,6 +179,25 @@ def check_change_impact(
         )
     if len(impacted) > MAX_IMPACTED:
         limitations.append(f"Impacted files are limited to the top {MAX_IMPACTED}.")
+    history = ownership.load_history(db, snapshot)
+    review_paths = [lookup[item.path] for item in changes if lookup[item.path] in manifest]
+    review_paths += [item.path for item in impacted[:10]]
+    reviewers = [
+        SuggestedReviewerResponse(
+            name=person.name,
+            commits=person.commits,
+            files=sorted(person.files)[:10],
+            score=round(person.score, 3),
+            last_commit=person.last_commit,
+            evidence_ids=[f"commit:{sha}" for sha in person.evidence_shas],
+        )
+        for person in ownership.suggest_reviewers(history, review_paths)
+    ]
+    if reviewers:
+        limitations.append(
+            "Suggested reviewers recently changed the affected files (recent commits count "
+            "more; bots and bulk commits excluded). Git identities are not verified."
+        )
     return ChangeImpactResponse(
         repository_id=repository_id,
         snapshot_id=snapshot.id,
@@ -195,4 +216,5 @@ def check_change_impact(
         impacted=impacted[:MAX_IMPACTED],
         modules=modules,
         limitations=limitations,
+        reviewers=reviewers,
     )
