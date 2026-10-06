@@ -153,7 +153,9 @@ def test_python_frameworks_and_clients_are_recognised() -> None:
         _role_for,
     )
 
-    assert _role_for("backend/app", ["backend/app/main.py"], Counter({"fastapi": 3}), False) == (
+    assert _role_for(
+        "backend/gateway", ["backend/gateway/main.py"], Counter({"fastapi": 3}), False
+    ) == (
         "api",
         "imports fastapi",
     )

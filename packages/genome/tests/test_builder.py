@@ -163,7 +163,9 @@ def test_tsconfig_path_aliases_resolve_per_package() -> None:
       // Next.js style aliases, with comments and a trailing comma
       "compilerOptions": {
         "baseUrl": ".",
-        "paths": { "@/*": ["./src/*"], "config": ["./src/config/index.ts"], "bad/*": ["../../../*"], },
+        "paths": {
+          "@/*": ["./src/*"], "config": ["./src/config/index.ts"], "bad/*": ["../../../*"],
+        },
       },
     }"""
     web = parse_config("apps/web/tsconfig.json", config)
