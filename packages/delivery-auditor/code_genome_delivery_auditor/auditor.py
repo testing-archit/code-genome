@@ -98,10 +98,32 @@ def _assess_deployment(
     )
 
 
+TEST_CHECK = re.compile(
+    r"test|spec|pytest|jest|vitest|mocha|playwright|cypress|e2e|unit|integration|check suite",
+    re.IGNORECASE,
+)
+
+
 def _assess_tests(
     candidates: tuple[EvidenceCandidate, ...], code_evidence: tuple[str, ...]
 ) -> ClaimAssessment:
-    runs = [item for item in candidates if item.kind == "ci_run"]
+    all_runs = [item for item in candidates if item.kind == "ci_run"]
+    # A lint or deploy check passing says nothing about tests; judge test-named checks when
+    # there are any, otherwise all checks with a lower ceiling.
+    test_runs = [item for item in all_runs if item.name and TEST_CHECK.search(item.name)]
+    assessment = _judge_runs(test_runs or all_runs, code_evidence)
+    if all_runs and not test_runs and assessment.status == "VERIFIED":
+        return ClaimAssessment(
+            "PARTIALLY_VERIFIED",
+            0.5,
+            assessment.evidence_ids,
+            "CI checks passed, but none is named like a test suite.",
+            (*assessment.limitations, "Check names were matched against common test runners."),
+        )
+    return assessment
+
+
+def _judge_runs(runs: list[EvidenceCandidate], code_evidence: tuple[str, ...]) -> ClaimAssessment:
     if not runs:
         return ClaimAssessment(
             "EXTERNAL_EVIDENCE_REQUIRED",

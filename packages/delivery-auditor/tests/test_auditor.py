@@ -32,7 +32,9 @@ def test_delivery_narrative_is_not_mistaken_for_live_deployment() -> None:
 
 
 def _ci(identifier: str, outcome: str) -> EvidenceCandidate:
-    return EvidenceCandidate(f"provider:{identifier}", "ci_run", "CI check tests", outcome=outcome)
+    return EvidenceCandidate(
+        f"provider:{identifier}", "ci_run", "CI check tests", outcome=outcome, name="test"
+    )
 
 
 def _deploy(identifier: str, outcome: str, environment: str) -> EvidenceCandidate:
@@ -66,3 +68,24 @@ def test_deployment_claims_need_a_successful_deployment_to_the_named_environment
     # A merge or code change alone never counts as a deployment.
     code_only = (EvidenceCandidate("change:abc:export.ts", "repository_change", "export deployed"),)
     assert assess_claim(claim, code_only).status == "EXTERNAL_EVIDENCE_REQUIRED"
+
+
+def test_only_test_named_checks_can_fully_verify_a_test_claim() -> None:
+    claim = parse_claims("All tests pass.")[0]
+    lint = EvidenceCandidate(
+        "provider:lint", "ci_run", "CI check lint", outcome="success", name="lint"
+    )
+    unit = EvidenceCandidate(
+        "provider:unit", "ci_run", "CI check test", outcome="failure", name="test (node 22)"
+    )
+    only_lint = assess_claim(claim, (lint,))
+    assert (
+        only_lint.status == "PARTIALLY_VERIFIED"
+        and "named like a test suite" in only_lint.rationale
+    )
+    # A passing lint check does not hide a failing test job.
+    assert assess_claim(claim, (lint, unit)).status == "NO_SUPPORTING_EVIDENCE"
+    passing = EvidenceCandidate(
+        "provider:unit2", "ci_run", "CI check test", outcome="success", name="Unit tests"
+    )
+    assert assess_claim(claim, (lint, passing)).status == "VERIFIED"

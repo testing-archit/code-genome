@@ -7,11 +7,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .body_limit import BodyLimitMiddleware
 from .config import get_settings
 from .database import SessionLocal
 from .errors import AppError, app_error_handler, validation_error_handler
 from .models import Membership, Workspace
-from .rate_limit import FixedWindowLimiter
+from .rate_limit import SlidingWindowLimiter
 from .routes import (
     analyses,
     architecture,
@@ -73,9 +74,10 @@ app.add_middleware(
     ],
     expose_headers=["Content-Disposition", "X-Content-SHA256", "X-Request-ID"],
 )
+app.add_middleware(BodyLimitMiddleware, limit=lambda: get_settings().max_request_bytes)
 app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
-request_limiter = FixedWindowLimiter()
+request_limiter = SlidingWindowLimiter()
 
 
 @app.middleware("http")

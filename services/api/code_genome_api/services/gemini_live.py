@@ -50,9 +50,15 @@ class LiveSession:
     setup: dict[str, Any]
 
 
+def _fence(text: str) -> str:
+    """Untrusted text must not close (or reopen) the <brief> block it is placed in."""
+    return text.replace("<", "\u2039").replace(">", "\u203a")
+
+
 def system_instruction(
     repository_name: str, snapshot_sha: str, language: str = "auto", brief: str = ""
 ) -> str:
+    brief = _fence(brief)
     background = (
         "Repository brief, extracted from the repository's README, manifest, file inventory, "
         "and history. Use it to understand what the user is talking about and to phrase "

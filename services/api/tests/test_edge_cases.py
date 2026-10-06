@@ -1,5 +1,6 @@
 """Hostile and unusual inputs must produce a clear 4xx or a valid answer, never a 5xx."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -167,3 +168,25 @@ def test_snapshot_list_is_empty_before_analysis(client: TestClient) -> None:
         f"/api/v1/repositories/{created.json()['id']}/snapshots", headers=HEADERS_FOR_EMPTY
     )
     assert response.status_code == 200 and response.json() == []
+
+
+def test_chunked_bodies_over_the_limit_are_rejected(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from code_genome_api.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "max_request_bytes", 1_000)
+
+    def chunks() -> Iterator[bytes]:
+        for _ in range(10):
+            yield b"x" * 200
+
+    response = client.post(
+        "/api/v1/delivery-reports",
+        content=chunks(),
+        headers={**HEADERS, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["code"] == "REQUEST_TOO_LARGE"
+    small = client.post("/api/v1/delivery-reports", content=b"{}", headers=HEADERS)
+    assert small.status_code != 413

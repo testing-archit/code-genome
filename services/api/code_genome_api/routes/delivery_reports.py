@@ -325,6 +325,7 @@ def _provider_candidates(
             ),
             outcome=row.outcome,
             environment=row.environment,
+            name=row.name,
         )
         for row in stored
     )

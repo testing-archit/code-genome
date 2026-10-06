@@ -3,7 +3,10 @@ from collections import deque
 from threading import Lock
 
 
-class FixedWindowLimiter:
+class SlidingWindowLimiter:
+    """Per-key sliding 60-second window: a request is allowed when fewer than ``limit``
+    requests from the same key arrived in the preceding 60 seconds."""
+
     def __init__(self, *, maximum_keys: int = 10_000) -> None:
         self.maximum_keys = maximum_keys
         self._requests: dict[str, deque[float]] = {}
@@ -26,3 +29,7 @@ class FixedWindowLimiter:
                     if values and values[-1] > cutoff
                 }
             return True
+
+
+# Former name, kept for existing imports.
+FixedWindowLimiter = SlidingWindowLimiter
