@@ -22,6 +22,7 @@ import type {
   ModuleGraph,
   ProblemDetail,
   ProviderSignal,
+  PullRequestImpact,
   Repository,
   RepositoryAutomation,
   RepositoryConnection,
@@ -212,11 +213,13 @@ export const api = {
   },
   getAutomation: (repositoryId: string) =>
     request<RepositoryAutomation>(`/repositories/${repositoryId}/automation`),
-  putAutomation: (repositoryId: string, autoAnalyze: boolean) =>
+  putAutomation: (repositoryId: string, autoAnalyze: boolean, prComments?: boolean) =>
     request<RepositoryAutomation>(`/repositories/${repositoryId}/automation`, {
       method: "PUT",
-      body: JSON.stringify({ auto_analyze: autoAnalyze }),
+      body: JSON.stringify({ auto_analyze: autoAnalyze, ...(prComments === undefined ? {} : { pr_comments: prComments }) }),
     }),
+  pullRequestImpact: (repositoryId: string, number: number) =>
+    request<PullRequestImpact>(`/repositories/${repositoryId}/pull-requests/${number}/impact`),
 
   ask: (repositoryId: string, question: string, language: AnswerLanguage, channel: "text" | "voice" = "text") =>
     request<GroundedAnswer>("/chat/answers", {

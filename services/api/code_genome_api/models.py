@@ -48,6 +48,8 @@ class Repository(Base):
     default_branch: Mapped[str] = mapped_column(String(255), default="main")
     status: Mapped[str] = mapped_column(String(32), default="REGISTERED")
     auto_analyze: Mapped[bool] = mapped_column(default=False)
+    # Opt-in: comment the change impact on pull requests (needs a token that can comment).
+    pr_comments: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     analyses: Mapped[list["AnalysisRun"]] = relationship(back_populates="repository")

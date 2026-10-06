@@ -6,22 +6,28 @@ import re
 from typing import Annotated, Any, Literal
 
 from code_genome_git import validate_ref
-from fastapi import APIRouter, BackgroundTasks, Header, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Header, Path, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from ..audit import record_audit_event
-from ..auth import Actor, Database
+from ..auth import Actor, Database, WorkspaceContext
 from ..config import get_settings
+from ..database import SessionLocal
 from ..errors import AppError
 from ..ids import new_id
 from ..models import AnalysisRun, Repository, WebhookDelivery
 from ..queue import enqueue_analysis
 from ..schemas import (
+    ChangeImpactCreate,
+    PullRequestImpactResponse,
     RepositoryAutomationPut,
     RepositoryAutomationResponse,
     WebhookResultResponse,
 )
+from ..services import pr_comments, provider_evidence
+from ..services.provider_evidence import ProviderError
+from .changes import check_change_impact
 from .intelligence import _repository
 
 router = APIRouter(tags=["automation"])
@@ -40,10 +46,11 @@ def _automation(repository: Repository) -> RepositoryAutomationResponse:
     return RepositoryAutomationResponse(
         repository_id=repository.id,
         auto_analyze=repository.auto_analyze,
+        pr_comments=repository.pr_comments,
         branch=repository.default_branch,
         webhook_configured=bool(secret and secret.get_secret_value()),
         webhook_path=f"/api/v1{WEBHOOK_PATH}",
-        events=["push"],
+        events=["push", "pull_request"] if repository.pr_comments else ["push"],
     )
 
 
@@ -84,7 +91,133 @@ def put_automation(
             request_id=request.state.request_id,
         )
         db.commit()
+    if payload.pr_comments is not None and repository.pr_comments != payload.pr_comments:
+        repository.pr_comments = payload.pr_comments
+        record_audit_event(
+            db,
+            workspace_id=actor.workspace_id,
+            actor_id=actor.user_id,
+            action=(
+                "repository.pr_comments.enabled"
+                if payload.pr_comments
+                else "repository.pr_comments.disabled"
+            ),
+            resource_type="repository",
+            resource_id=repository.id,
+            request_id=request.state.request_id,
+        )
+        db.commit()
     return _automation(repository)
+
+
+def _pull_request_impact(
+    db: Database, repository: Repository, number: int, token: str | None
+) -> PullRequestImpactResponse:
+    slug = provider_evidence.repository_slug(repository.external_id)
+    if repository.provider != "github" or slug is None:
+        raise AppError(
+            422, "UNSUPPORTED_PROVIDER", "Not a GitHub repository", "Only GitHub is supported."
+        )
+    try:
+        files = pr_comments.pull_request_files(*slug, number, token)
+    except ProviderError as error:
+        raise AppError(
+            424, "EVIDENCE_SOURCE_UNAVAILABLE", "Pull request unavailable", str(error)
+        ) from error
+    if not files:
+        raise AppError(
+            422, "INVALID_SCOPE", "Nothing to check", "The pull request changes no kept files."
+        )
+    system = WorkspaceContext(repository.workspace_id, WEBHOOK_ACTOR, "system")
+    impact = check_change_impact(
+        repository.id, ChangeImpactCreate(diff=None, paths=files), db, system
+    )
+    url = repository.clone_url.removesuffix(".git")
+    return PullRequestImpactResponse(
+        repository_id=repository.id,
+        pull_request=number,
+        files=files,
+        impact=impact,
+        comment_markdown=pr_comments.render_comment(impact, url),
+        comment_version=pr_comments.COMMENT_VERSION,
+    )
+
+
+@router.get(
+    "/repositories/{repository_id}/pull-requests/{number}/impact",
+    response_model=PullRequestImpactResponse,
+)
+def preview_pull_request_impact(
+    repository_id: str,
+    db: Database,
+    actor: Actor,
+    number: Annotated[int, Path(ge=1, le=10_000_000)],
+) -> PullRequestImpactResponse:
+    """Change impact of a pull request and the comment that would be posted (nothing posted)."""
+    repository = _repository(db, repository_id, actor)
+    return _pull_request_impact(
+        db, repository, number, provider_evidence.repository_token(db, repository)
+    )
+
+
+def _post_pull_request_comment(repository_id: str, workspace_id: str, number: int) -> None:
+    """Background job: compute and post (or update) the impact comment; failures are logged."""
+    with SessionLocal() as db:
+        repository = db.scalar(
+            select(Repository).where(
+                Repository.id == repository_id, Repository.workspace_id == workspace_id
+            )
+        )
+        if repository is None or not repository.pr_comments:
+            return
+        token = provider_evidence.repository_token(db, repository)
+        slug = provider_evidence.repository_slug(repository.external_id)
+        if token is None or slug is None:
+            logger.warning("pr_comment_skipped_no_token", extra={"repository_id": repository_id})
+            return
+        try:
+            result = _pull_request_impact(db, repository, number, token)
+            url = pr_comments.upsert_comment(*slug, number, result.comment_markdown, token)
+        except (AppError, ProviderError) as error:
+            logger.warning(
+                "pr_comment_failed",
+                extra={"repository_id": repository_id, "error": type(error).__name__},
+            )
+            return
+        record_audit_event(
+            db,
+            workspace_id=workspace_id,
+            actor_id=WEBHOOK_ACTOR,
+            action="repository.pr_comment.posted",
+            resource_type="repository",
+            resource_id=repository_id,
+            after_hash=hashlib.sha256(url.encode()).hexdigest(),
+            request_id=f"pr-{number}",
+        )
+        db.commit()
+
+
+def _pull_request_target(payload: Any) -> tuple[str, str, int] | None:
+    """(lowercased full name, base branch, number) for PR events that change code."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("action") not in {"opened", "synchronize", "reopened", "ready_for_review"}:
+        return None
+    pull = payload.get("pull_request")
+    repository = payload.get("repository")
+    full_name = repository.get("full_name") if isinstance(repository, dict) else None
+    number = pull.get("number") if isinstance(pull, dict) else None
+    base = pull.get("base") if isinstance(pull, dict) else None
+    branch = base.get("ref") if isinstance(base, dict) else None
+    if not isinstance(full_name, str) or not _FULL_NAME.match(full_name):
+        raise AppError(
+            422, "INVALID_PAYLOAD", "Invalid payload", "repository.full_name is invalid."
+        )
+    if not isinstance(number, int) or number < 1 or not isinstance(branch, str):
+        raise AppError(422, "INVALID_PAYLOAD", "Invalid payload", "pull_request is invalid.")
+    if isinstance(pull, dict) and pull.get("draft") is True:
+        return None
+    return full_name.lower(), branch, number
 
 
 def _verify_signature(body: bytes, signature: str | None) -> None:
@@ -194,6 +327,30 @@ async def receive_github_webhook(
 
     if x_github_event == "ping":
         return finish("pong", "Webhook reached CODE GENOME.", [])
+    if x_github_event == "pull_request":
+        pr_target = _pull_request_target(payload)
+        if pr_target is None:
+            return finish("ignored", "Only opened or updated non-draft pull requests.", [])
+        pr_name, base_branch, number = pr_target
+        opted_in = list(
+            db.scalars(
+                select(Repository).where(
+                    Repository.provider == "github",
+                    Repository.external_id == pr_name,
+                    Repository.default_branch == base_branch,
+                    Repository.pr_comments.is_(True),
+                )
+            )
+        )
+        if not opted_in:
+            return finish("ignored", "No repository has pull-request comments on.", [])
+        result = finish("queued", f"Impact comment scheduled for pull request #{number}.", [])
+        for repository in opted_in:
+            background_tasks.add_task(
+                _post_pull_request_comment, repository.id, repository.workspace_id, number
+            )
+        response.status_code = status.HTTP_202_ACCEPTED
+        return result
     if x_github_event != "push":
         return finish("ignored", f"Event '{x_github_event}' does not trigger analysis.", [])
     target = _push_target(payload)

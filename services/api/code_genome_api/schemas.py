@@ -692,11 +692,14 @@ class SnapshotComparisonResponse(BaseModel):
 
 class RepositoryAutomationPut(BaseModel):
     auto_analyze: bool
+    # Omitted keeps the current setting, so older clients do not switch comments off.
+    pr_comments: bool | None = None
 
 
 class RepositoryAutomationResponse(BaseModel):
     repository_id: str
     auto_analyze: bool
+    pr_comments: bool = False
     branch: str
     webhook_configured: bool
     webhook_path: str
@@ -1062,3 +1065,14 @@ class ProviderSignalResponse(BaseModel):
     observed_at: datetime | None
     fetched_at: datetime
     analysis_version: str
+
+
+class PullRequestImpactResponse(BaseModel):
+    """Change impact of a pull request's files and the comment Code Genome would post."""
+
+    repository_id: str
+    pull_request: int
+    files: list[str]
+    impact: ChangeImpactResponse
+    comment_markdown: str
+    comment_version: str

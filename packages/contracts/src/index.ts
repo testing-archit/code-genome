@@ -528,6 +528,8 @@ export type ExportFormat = "md" | "json";
 export type RepositoryAutomation = {
   repository_id: string;
   auto_analyze: boolean;
+  /** Comment the change impact on pull requests (pr-comment@1); needs a token that can comment. */
+  pr_comments?: boolean;
   branch: string;
   webhook_configured: boolean;
   webhook_path: string;
@@ -1099,4 +1101,14 @@ export type ProviderSignal = {
   observed_at: string | null;
   fetched_at: string;
   analysis_version: string;
+};
+
+/** GET /repositories/{id}/pull-requests/{number}/impact: impact of a PR and its comment preview. */
+export type PullRequestImpact = {
+  repository_id: string;
+  pull_request: number;
+  files: string[];
+  impact: ChangeImpact;
+  comment_markdown: string;
+  comment_version: string;
 };

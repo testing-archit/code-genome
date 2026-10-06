@@ -4,6 +4,7 @@ import type { ChangeImpact, ChangeKind, ImpactGraphMetrics } from "@code-genome/
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useRef, useState } from "react";
 
+import { Markdown } from "../../../../components/markdown";
 import { EvidenceChips, RequiresSnapshot, useRepo } from "../../../../components/repo-context";
 import { Empty, Meter, Notice, Panel } from "../../../../components/ui";
 import { api, errorMessage } from "../../../../lib/api";
@@ -43,6 +44,8 @@ function ChangeView() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChangeImpact | null>(null);
+  const [pullNumber, setPullNumber] = useState("");
+  const [comment, setComment] = useState<string | null>(null);
 
   const listedPaths = paths.split("\n").map((line) => line.trim()).filter(Boolean);
   const tooLarge =
@@ -67,7 +70,27 @@ function ChangeView() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setComment(null);
     void run(diff, listedPaths);
+  }
+
+  async function loadPullRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const number = Number(pullNumber);
+    if (!Number.isInteger(number) || number < 1) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const pull = await api.pullRequestImpact(repository.id, number);
+      setDiff("");
+      setPaths(pull.files.join("\n"));
+      setResult(pull.impact);
+      setComment(pull.comment_markdown);
+    } catch (caught) {
+      setError(errorMessage(caught, "The pull request could not be loaded."));
+    } finally {
+      setWorking(false);
+    }
   }
 
   // Arriving from "What will break if I change this file?" runs the check straight away.
@@ -82,7 +105,14 @@ function ChangeView() {
 
   return (
     <div className="split" style={{ "--split-columns": "minmax(0, 0.85fr) minmax(0, 1.35fr)" } as React.CSSProperties}>
-      <Panel title="What will break?" description="Name a file, list the files a pull request touches, or paste a diff. Nothing is stored.">
+      <Panel title="What will break?" description="Load a pull request, name a file, list the files a pull request touches, or paste a diff. Nothing is stored.">
+        <form className="row" onSubmit={loadPullRequest} style={{ gap: 8, alignItems: "end", flexWrap: "wrap", marginBottom: 16 }}>
+          <label className="field" style={{ width: 170 }}>
+            Pull request #
+            <input className="input" inputMode="numeric" min={1} onChange={(event) => setPullNumber(event.target.value)} placeholder="123" type="number" value={pullNumber} />
+          </label>
+          <button className="button button-secondary" disabled={working || !pullNumber} type="submit">{working ? "Loading…" : "Load from GitHub"}</button>
+        </form>
         <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
           <label className="field">
             Unified diff
@@ -113,13 +143,13 @@ function ChangeView() {
       <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
         {!result ? (
           <Panel><Empty title="No change checked yet">Results rank the files this change may affect, using imports and co-change history from the latest snapshot.</Empty></Panel>
-        ) : <ChangeResult result={result} />}
+        ) : <ChangeResult comment={comment} result={result} />}
       </div>
     </div>
   );
 }
 
-function ChangeResult({ result }: { result: ChangeImpact }) {
+function ChangeResult({ result, comment }: { result: ChangeImpact; comment: string | null }) {
   const { summary } = result;
   const lead = result.changed[0];
   const band = (score: number) => (score >= 0.6 ? "High" : score >= 0.3 ? "Medium" : "Low");
@@ -148,7 +178,7 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
         <div className="stat"><strong>{summary.changed_files}</strong><span>files changed ({summary.changed_in_snapshot} known)</span></div>
         <div className="stat"><strong>{summary.impacted_files}</strong><span>may be affected</span></div>
         <div className="stat"><strong>{summary.modules_touched}</strong><span>modules touched</span></div>
-        <div className="stat"><strong>{summary.max_risk === null ? "—" : Math.round(summary.max_risk * 100)}</strong><span>highest risk · {summary.high_risk_files} ≥ 60</span></div>
+        <div className="stat"><strong>{summary.max_risk === null ? "—" : Math.round(summary.max_risk * 100)}</strong><span>highest risk · {summary.high_risk_files} file{summary.high_risk_files === 1 ? "" : "s"} at 60 or more</span></div>
       </div>
 
       <Panel title="Changed files" description={`Risk from snapshot ${shortSha(result.snapshot_sha)}, highest first.`} flush>
@@ -195,6 +225,16 @@ function ChangeResult({ result }: { result: ChangeImpact }) {
           </div>
         )}
       </Panel>
+
+      {comment && (
+        <Panel
+          title="Pull-request comment preview"
+          description="What Code Genome posts on the pull request when comments are on in Settings (one comment, edited on each push)."
+          actions={<button className="button button-secondary button-small" onClick={() => void navigator.clipboard?.writeText(comment)} type="button">Copy Markdown</button>}
+        >
+          <Markdown source={comment.replace(/^<!--.*-->\n/, "")} />
+        </Panel>
+      )}
 
       {result.reviewers && result.reviewers.length > 0 && (
         <Panel title="Suggested reviewers" description="People who recently changed the affected files. Recent commits count more; bots and bulk commits are left out. Git identities as recorded, not verified." flush>

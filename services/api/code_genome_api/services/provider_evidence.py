@@ -15,10 +15,15 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from ..models import Repository
 
 PROVIDER_VERSION = "provider-evidence@1"
 API_BASE = "https://api.github.com"
@@ -174,3 +179,34 @@ def describe(signal: Signal) -> str:
         f"Deployment to {signal.environment or 'an unnamed environment'} {verdict} for commit "
         f"{signal.commit_sha[:12]} deploy deployed release"
     )
+
+
+def repository_token(db: "Session", repository: "Repository") -> str | None:
+    """The repository's stored read token, else CODE_GENOME_GITHUB_API_TOKEN, else None."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from ..config import get_settings  # noqa: PLC0415
+    from ..models import RepositoryConnection  # noqa: PLC0415
+    from .credentials import (  # noqa: PLC0415
+        CredentialConfigurationError,
+        CredentialDecryptionError,
+    )
+    from .structural_analysis import _load_git_credential  # noqa: PLC0415
+
+    connection = db.scalar(
+        select(RepositoryConnection).where(
+            RepositoryConnection.repository_id == repository.id,
+            RepositoryConnection.workspace_id == repository.workspace_id,
+            RepositoryConnection.revoked_at.is_(None),
+        )
+    )
+    try:
+        credential = _load_git_credential(
+            connection, workspace_id=repository.workspace_id, repository_id=repository.id
+        )
+    except (CredentialConfigurationError, CredentialDecryptionError):
+        credential = None
+    if credential is not None:
+        return credential.token
+    fallback = get_settings().github_api_token
+    return fallback.get_secret_value() if fallback and fallback.get_secret_value() else None

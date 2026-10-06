@@ -6,7 +6,6 @@ from sqlalchemy import select
 
 from ..audit import record_audit_event
 from ..auth import Actor, Database
-from ..config import get_settings
 from ..errors import AppError
 from ..idempotency import find_idempotent_resource, fingerprint, record_idempotency
 from ..ids import new_id
@@ -18,7 +17,6 @@ from ..models import (
     ProviderSignal,
     Repository,
     RepositoryCommit,
-    RepositoryConnection,
     UnreportedChange,
     utc_now,
 )
@@ -32,8 +30,6 @@ from ..schemas import (
     UnreportedChangeResponse,
 )
 from ..services import provider_evidence
-from ..services.credentials import CredentialConfigurationError, CredentialDecryptionError
-from ..services.structural_analysis import _load_git_credential
 
 router = APIRouter(prefix="/delivery-reports", tags=["delivery-auditor"])
 
@@ -246,25 +242,6 @@ def get_provider_signal(signal_id: str, db: Database, actor: Actor) -> ProviderS
     return ProviderSignalResponse.model_validate(row, from_attributes=True)
 
 
-def _provider_token(db: Database, repository: Repository) -> str | None:
-    connection = db.scalar(
-        select(RepositoryConnection).where(
-            RepositoryConnection.repository_id == repository.id,
-            RepositoryConnection.workspace_id == repository.workspace_id,
-        )
-    )
-    try:
-        credential = _load_git_credential(
-            connection, workspace_id=repository.workspace_id, repository_id=repository.id
-        )
-    except (CredentialConfigurationError, CredentialDecryptionError):
-        credential = None
-    if credential is not None:
-        return credential.token
-    fallback = get_settings().github_api_token
-    return fallback.get_secret_value() if fallback and fallback.get_secret_value() else None
-
-
 def _provider_candidates(
     db: Database, report: DeliveryReport, changes: list[FileChange]
 ) -> tuple[tuple[EvidenceCandidate, ...], list[str]]:
@@ -288,7 +265,7 @@ def _provider_candidates(
         signals, limitations = provider_evidence.collect_signals(
             *slug,
             newest_first,
-            _provider_token(db, repository),
+            provider_evidence.repository_token(db, repository),
             fetch=provider_evidence.github_fetch,
         )
         for signal in signals:

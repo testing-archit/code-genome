@@ -127,6 +127,20 @@ function AutomationPanel({ repositoryId }: { repositoryId: string }) {
     };
   }, [repositoryId]);
 
+  async function toggleComments(next: boolean) {
+    if (!automation) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setAutomation(await api.putAutomation(repositoryId, automation.auto_analyze, next));
+      toast(next ? "Pull requests will get an impact comment" : "Pull-request comments turned off");
+    } catch (caught) {
+      setError(errorMessage(caught, "The setting could not be saved."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function toggle(next: boolean) {
     setSaving(true);
     setError(null);
@@ -149,6 +163,13 @@ function AutomationPanel({ repositoryId }: { repositoryId: string }) {
           <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: saving ? "wait" : "pointer" }}>
             <input checked={automation.auto_analyze} disabled={saving} onChange={(event) => void toggle(event.target.checked)} type="checkbox" />
             <span>Analyze each push to <code>{automation.branch}</code></span>
+          </label>
+          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: saving ? "wait" : "pointer" }}>
+            <input checked={Boolean(automation.pr_comments)} disabled={saving} onChange={(event) => void toggleComments(event.target.checked)} style={{ marginTop: 3 }} type="checkbox" />
+            <span>
+              Comment the change impact on pull requests into <code>{automation.branch}</code>
+              <small className="muted" style={{ display: "block" }}>Needs the webhook to send <code>pull_request</code> events and a token that can write issue comments. One comment per pull request, edited on each push.</small>
+            </span>
           </label>
           {error && <Notice tone="error">{error}</Notice>}
           {!automation.webhook_configured && (

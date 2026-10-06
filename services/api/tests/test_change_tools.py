@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from code_genome_api.config import get_settings
@@ -597,3 +597,94 @@ def test_impact_history_is_cached_per_snapshot_and_workspace(
         impact._prepare(db, cast(RepositorySnapshot, foreign), None)
     assert calls[-1] == ("ws_other", f"snap_{HEAD[:6]}")
     assert len(calls) == 2
+
+
+def test_pull_request_comments_are_opt_in_and_scheduled_for_code_changes(
+    client: TestClient, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from code_genome_api.routes import webhooks
+
+    monkeypatch.setattr(get_settings(), "github_webhook_secret", SecretStr(SECRET))
+    scheduled: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        webhooks,
+        "_post_pull_request_comment",
+        lambda repository_id, workspace_id, number: scheduled.append((repository_id, number)),
+    )
+    repository_id = setup_workspace(client, session_factory, "Acme/Reviews")
+    url = "/api/v1/webhooks/github"
+
+    def send(payload: dict[str, object], delivery: str) -> Any:
+        request = _signed(payload, delivery, "pull_request")
+        return client.post(
+            url,
+            content=cast(bytes, request["content"]),
+            headers=cast(dict[str, str], request["headers"]),
+        )
+
+    opened: dict[str, object] = {
+        "action": "opened",
+        "repository": {"full_name": "Acme/Reviews"},
+        "pull_request": {"number": 12, "base": {"ref": "main"}, "draft": False},
+    }
+    off = send(opened, "pr-off")
+    assert off.json()["outcome"] == "ignored" and scheduled == []
+
+    enabled = client.put(
+        f"/api/v1/repositories/{repository_id}/automation",
+        headers=auth(),
+        json={"auto_analyze": False, "pr_comments": True},
+    )
+    assert enabled.json()["pr_comments"] is True
+    assert "pull_request" in enabled.json()["events"]
+    # Older clients that send only auto_analyze keep the comment setting.
+    kept = client.put(
+        f"/api/v1/repositories/{repository_id}/automation",
+        headers=auth(),
+        json={"auto_analyze": False},
+    )
+    assert kept.json()["pr_comments"] is True
+
+    queued = send(opened, "pr-1")
+    assert queued.status_code == 202 and queued.json()["outcome"] == "queued"
+    assert scheduled == [(repository_id, 12)]
+    draft = {
+        **opened,
+        "pull_request": {**cast(dict[str, object], opened["pull_request"]), "draft": True},
+    }
+    assert send(draft, "pr-2").json()["outcome"] == "ignored"
+    closed = {**opened, "action": "closed"}
+    assert send(closed, "pr-3").json()["outcome"] == "ignored"
+    bad = {**opened, "pull_request": {"number": "12", "base": {"ref": "main"}}}
+    assert send(bad, "pr-4").status_code == 422
+    assert scheduled == [(repository_id, 12)]
+
+
+def test_pull_request_comment_reads_paged_files_and_edits_instead_of_duplicating() -> None:
+    from code_genome_api.services import pr_comments
+
+    calls: list[tuple[str, str]] = []
+    existing = [{"id": 5, "body": "unrelated"}, {"id": 9, "body": f"{pr_comments.MARKER}\nold"}]
+
+    def fake(method: str, url: str, token: str | None, body: dict[str, object] | None) -> object:
+        calls.append((method, url))
+        if "/files" in url:
+            page = int(url.rsplit("page=", 1)[1])
+            if page == 1:
+                return [{"filename": f"src/f{i}.ts", "status": "modified"} for i in range(99)] + [
+                    {"filename": "src/gone.ts", "status": "removed"}
+                ]
+            return [{"filename": "src/last.ts", "status": "added"}]
+        if method == "GET":
+            return existing
+        return {"html_url": f"https://github.com/acme/reviews/pull/12#comment-{method}"}
+
+    files = pr_comments.pull_request_files("acme", "reviews", 12, "token", fake)
+    assert len(files) == 100 and "src/gone.ts" not in files and files[-1] == "src/last.ts"
+    url = pr_comments.upsert_comment("acme", "reviews", 12, "new body", "token", fake)
+    assert url.endswith("comment-PATCH")
+    assert ("PATCH", "https://api.github.com/repos/acme/reviews/issues/comments/9") in calls
+    existing.clear()
+    assert pr_comments.upsert_comment("acme", "reviews", 12, "body", "token", fake).endswith(
+        "comment-POST"
+    )
