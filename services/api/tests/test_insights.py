@@ -142,3 +142,22 @@ def test_inventory_accepts_the_file_limit_the_web_app_requests(
     )
     assert response.status_code == 200
     assert {item["path"] for item in response.json()["files"]} >= {"README.md", "src/index.ts"}
+
+
+def test_python_frameworks_and_clients_are_recognised() -> None:
+    from collections import Counter
+
+    from code_genome_api.services.insights import (
+        DATASTORE_PACKAGES,
+        INTEGRATION_PACKAGES,
+        _role_for,
+    )
+
+    assert _role_for("backend/app", ["backend/app/main.py"], Counter({"fastapi": 3}), False) == (
+        "api",
+        "imports fastapi",
+    )
+    assert _role_for("backend/store", ["backend/store/x.py"], Counter(), True)[0] == "data"
+    assert DATASTORE_PACKAGES["sqlalchemy"].startswith("SQL database")
+    assert DATASTORE_PACKAGES["psycopg"] == "PostgreSQL"
+    assert INTEGRATION_PACKAGES["anthropic"] == "Anthropic"

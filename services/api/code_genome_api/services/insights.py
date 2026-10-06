@@ -465,6 +465,8 @@ _ROLE_SEGMENTS: dict[str, str] = {
 _API_FRAMEWORKS = {
     "express", "fastify", "koa", "hono", "@nestjs/common", "@hapi/hapi", "next", "restify",
     "@trpc/server", "apollo-server", "@apollo/server", "graphql-yoga",
+    # Python web frameworks (imports are grouped by top-level package).
+    "fastapi", "flask", "django", "starlette", "sanic", "falcon", "tornado", "litestar",
 }  # fmt: skip
 _UI_PACKAGES = {"react", "react-dom", "vue", "svelte", "solid-js", "preact", "@angular/core"}
 
@@ -499,6 +501,20 @@ DATASTORE_PACKAGES: dict[str, str] = {
     "@aws-sdk/client-s3": "Amazon S3",
     "@google-cloud/firestore": "Firestore",
     "@elastic/elasticsearch": "Elasticsearch",
+    # Python clients and ORMs.
+    "sqlalchemy": "SQL database (SQLAlchemy)",
+    "sqlmodel": "SQL database (SQLModel)",
+    "psycopg": "PostgreSQL",
+    "psycopg2": "PostgreSQL",
+    "asyncpg": "PostgreSQL",
+    "pymysql": "MySQL",
+    "MySQLdb": "MySQL",
+    "pymongo": "MongoDB",
+    "motor": "MongoDB",
+    "peewee": "SQL database (Peewee)",
+    "tortoise": "SQL database (Tortoise ORM)",
+    "elasticsearch": "Elasticsearch",
+    "duckdb": "DuckDB",
 }
 INTEGRATION_PACKAGES: dict[str, str] = {
     "stripe": "Stripe",
@@ -535,6 +551,15 @@ INTEGRATION_PACKAGES: dict[str, str] = {
     "replicate": "Replicate",
     "langchain": "LangChain",
     "@pinecone-database/pinecone": "Pinecone",
+    # Python SDKs.
+    "anthropic": "Anthropic",
+    "boto3": "AWS",
+    "botocore": "AWS",
+    "sentry_sdk": "Sentry",
+    "slack_sdk": "Slack",
+    "github": "GitHub API",
+    "pinecone": "Pinecone",
+    "celery": "Celery task queue",
 }
 
 
