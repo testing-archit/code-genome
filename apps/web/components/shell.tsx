@@ -139,6 +139,9 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
           <RepoNav pathname={pathname} repositoryId={activeRepoId} />
         )}
         <div className="rail-foot">
+          <Link aria-current={pathname === "/assistant" ? "page" : undefined} className="rail-link" href="/assistant">
+            <MicIcon /> Assistant
+          </Link>
           <Link aria-current={pathname === "/activity" ? "page" : undefined} className="rail-link" href="/activity">
             <ActivityIcon /> Activity log
           </Link>
@@ -203,6 +206,9 @@ export function TopBar({ title, detail, actions }: { title: React.ReactNode; det
         {detail && <span className="muted small truncate">{detail}</span>}
       </div>
       {actions}
+      <Link aria-label="Open the Code Genome assistant" className="icon-button" href="/assistant" title="Assistant (voice)">
+        <MicIcon size={17} />
+      </Link>
       <button className="search-trigger" onClick={() => setDialog("palette")} type="button" aria-label="Search and jump">
         <SearchIcon size={16} /><span>Search or jump to…</span><kbd>⌘K</kbd>
       </button>
@@ -291,6 +297,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
     list.push(
       { id: "add", group: "Workspace", label: "Add repository", keywords: "add new register repository github", run: () => setDialog("add-repository") },
       { id: "home", group: "Workspace", label: "All repositories", keywords: "home repositories", run: go("/") },
+      { id: "assistant", group: "Workspace", label: "Assistant", keywords: "assistant voice help code genome guide talk", run: go("/assistant") },
       { id: "activity", group: "Workspace", label: "Activity log", keywords: "audit activity events log", run: go("/activity") },
     );
     const needle = trimmed.toLowerCase();

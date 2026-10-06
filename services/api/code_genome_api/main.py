@@ -16,6 +16,7 @@ from .rate_limit import SlidingWindowLimiter
 from .routes import (
     analyses,
     architecture,
+    assistant,
     changes,
     conversations,
     delivery_reports,
@@ -130,6 +131,7 @@ async def request_id(request: Request, call_next):  # type: ignore[no-untyped-de
 
 
 app.include_router(health.router, prefix="/api/v1")
+app.include_router(assistant.router, prefix="/api/v1")
 app.include_router(workspaces.router, prefix="/api/v1")
 app.include_router(repositories.router, prefix="/api/v1")
 app.include_router(analyses.router, prefix="/api/v1")

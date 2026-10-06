@@ -268,8 +268,9 @@ export type VoiceName = "Kore" | "Puck" | "Charon" | "Aoede" | "Fenrir" | "Leda"
 
 export type VoiceSession = {
   id: string;
-  repository_id: string;
-  snapshot_sha: string;
+  /** Null for the workspace-level assistant. */
+  repository_id: string | null;
+  snapshot_sha: string | null;
   model: string;
   voice: VoiceName;
   language: AnswerLanguage;
@@ -1111,4 +1112,13 @@ export type PullRequestImpact = {
   impact: ChangeImpact;
   comment_markdown: string;
   comment_version: string;
+};
+
+/** POST /assistant/answers: an answer about Code Genome itself, cited to its documentation. */
+export type AssistantAnswer = {
+  answer: string;
+  evidence_ids: string[];
+  limitations: string[];
+  sources: Array<{ id: string; path: string; title: string; excerpt: string }>;
+  knowledge_version: string;
 };

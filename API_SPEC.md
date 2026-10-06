@@ -10,7 +10,7 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `PUT /repositories/{id}/connection` | encrypt/rotate private GitHub access | `200 RepositoryConnection` |
 | `GET /repositories/{id}/connection` | connection metadata, never the secret | `200 RepositoryConnection` |
 | `DELETE /repositories/{id}/connection` | revoke and erase credential envelope | `204` |
-| `POST /repositories/{id}/analyses` | queue snapshot analysis | `202 AnalysisRun` |
+| `POST /repositories/{id}/analyses` | queue snapshot analysis; optional `as_of` (full commit SHA or `YYYY-MM-DD`) analyses a past point, kept out of "current" views | `202 AnalysisRun` |
 | `GET /analyses/{id}` | job progress/diagnostics, live `stage` (`fetching` → `indexing` → `mining_history` → `evolution` → `tracing_bugs` → `parsing` → `publishing` → `complete`) and `progress_counts` (files, commits, co-change pairs, modules, fix commits, bug links, dependencies, calls, knowledge excerpts) | `200 AnalysisRun` |
 | `GET /repositories/{id}/inventory` | bounded refs, commits, and file manifest | `200 RepositoryInventory` |
 | `GET /repositories/{id}/architecture` | inferred modules, hotspots, co-change | `200 Architecture` |
@@ -29,12 +29,12 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `GET /conversations/{id}` | messages, each assistant turn with its cited answer | `200 Conversation` |
 | `POST /conversations/{id}/messages` | ask a follow-up; history resolves references only | `201 ConversationTurn` |
 | `POST /conversations/{id}/messages/stream` | same as above as `text/event-stream`: `status`, `delta` (unverified draft), `fallback`, `done` (stored `ConversationTurn`), `error`; nothing is stored unless the stream completes | `200 text/event-stream` |
-| `POST /repositories/{id}/impact/change` | rank impact of a unified diff and/or path list against the latest snapshot | `200 ChangeImpact` |
+| `POST /repositories/{id}/impact/change` | rank impact of a unified diff and/or path list against the latest snapshot; includes up to three suggested `reviewers` (`ownership@1`) | `200 ChangeImpact` |
 | `GET /repositories/{id}/snapshots` | published snapshots, newest first | `200 SnapshotSummary[]` |
 | `GET /repositories/{id}/compare?base=&head=` | files, imports, inferred modules, hotspots between two snapshots; sections missing from either side are listed in `unavailable` | `200 SnapshotComparison` |
 | `GET /repositories/{id}/exports/{architecture\|risk\|comparison}?format=md\|json` | cited, audited report download | `200 text/markdown` or JSON |
-| `GET/PUT /repositories/{id}/automation` | opt in to push-triggered re-analysis (owner/admin) | `200 RepositoryAutomation` |
-| `POST /webhooks/github` | GitHub `push`/`ping`; HMAC `X-Hub-Signature-256` with `CODE_GENOME_GITHUB_WEBHOOK_SECRET`, delivery-ID replay protection | `202`/`200 WebhookResult` |
+| `GET/PUT /repositories/{id}/automation` | opt in to push-triggered re-analysis and, with `pr_comments`, pull-request impact comments (owner/admin) | `200 RepositoryAutomation` |
+| `POST /webhooks/github` | GitHub `push`/`ping`/`pull_request`; HMAC `X-Hub-Signature-256` with `CODE_GENOME_GITHUB_WEBHOOK_SECRET`, delivery-ID replay protection | `202`/`200 WebhookResult` |
 | `DELETE /conversations/{id}` | delete a conversation (answers stay audited) | `204` |
 | `POST /voice/sessions` | mint a single-use Gemini Live token with locked setup | `201 VoiceSession` |
 | `GET /repositories/{id}/ml` | trained models, evaluations, and outputs for the latest snapshot | `200 MlOverview` |
@@ -42,13 +42,17 @@ Base path: `/api/v1`. JSON requests/responses. OIDC session/JWT required except 
 | `GET /repositories/{id}/search?q=&kind=` | ranked search with the repository's selected retrieval mode | `200 SearchResults` |
 | `POST /chat/answers/{id}/feedback` | record answer feedback | `200` |
 | `GET /repositories/{id}/overview` | health score, counts, riskiest files and components, instability forecast, README summary | `200 RepositoryOverview` |
-| `GET /repositories/{id}/module-graph` | components with inferred role and reason, data stores, integrations, contributors, commit/fix counts, last change; import and co-change links | `200 ModuleGraph` |
+| `GET /repositories/{id}/module-graph` | components with inferred role and reason, data stores, integrations, contributors, commit/fix counts, last change, and `bus_factor`; import and co-change links | `200 ModuleGraph` |
 | `GET /repositories/{id}/docs` | six generated Markdown documents with citations; `rewritten_markdown`/`rewrite` when an accepted model-written version exists for the same source text | `200 GeneratedDocuments` |
 | `POST /repositories/{id}/docs/rewrite` | ask Gemini for readable versions; each is stored with model and source hash and accepted only if it keeps every citation and heading and cites nothing new (`docs-rewrite@1`). `409 GEMINI_NOT_CONFIGURED` without a key | `200 GeneratedDocuments` |
 | `GET /repositories/{id}/docs/{name}/download` | download one generated document (audited) | `200 text/markdown` |
 | `GET /repositories/{id}/genome?focus=&limit=` | Software Genome Graph: files, components, symbols, developers, commits, packages, data stores, external APIs; 16 edge types, each with evidence and `inferred`. `focus` (file path or component) returns its 2-hop neighbourhood | `200 GenomeGraph` |
 | `GET /repositories/{id}/bugs?path=&limit=` | SZZ-lite history: fix commits and candidate bug-introducing commits with blamed lines, confidence, bulk/boundary flags; per-file counts. Candidates, not proof | `200 BugHistory` |
 | `GET /repositories/{id}/timeline?bucket=week\|month&path=` | commits, churn, fixes, authors, and bug-introducing commits per component and bucket (UTC) | `200 EvolutionTimeline` |
+| `POST /assistant/answers` | workspace assistant: answer a question about Code Genome itself from its documentation (`product-docs@1`), citing sections as `doc:<file>#<section>` | `200 AssistantAnswer` |
+| `POST /voice/assistant-sessions` | single-use Gemini Live token for the workspace assistant; tools: `search_code_genome_docs`, `ask_repository` (browser proxies to `POST /chat/answers`), `open_page` | `201 VoiceSession` (`repository_id` null) |
+| `GET /repositories/{id}/pull-requests/{number}/impact` | change impact of a pull request's files and the comment Code Genome would post (`pr-comment@1`); nothing is posted | `200 PullRequestImpact` |
+| `GET /delivery-reports/signals/{id}` | one CI check run or deployment read from GitHub (`provider-evidence@1`) | `200 ProviderSignal` |
 | `POST /workspaces/{id}/retention/run` | preview/execute report retention | `200` |
 | `GET /workspaces/{id}/audit-events` | audited JSON/CSV export | `200` |
 

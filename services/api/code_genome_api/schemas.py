@@ -491,8 +491,9 @@ class VoiceSessionCreate(BaseModel):
 
 class VoiceSessionResponse(BaseModel):
     id: str
-    repository_id: str
-    snapshot_sha: str
+    # Null for the workspace-level assistant, which is not tied to one repository.
+    repository_id: str | None
+    snapshot_sha: str | None
     model: str
     voice: str
     language: str
@@ -1076,3 +1077,30 @@ class PullRequestImpactResponse(BaseModel):
     impact: ChangeImpactResponse
     comment_markdown: str
     comment_version: str
+
+
+class AssistantAnswerCreate(BaseModel):
+    question: str = Field(min_length=1, max_length=2_000)
+    language: AnswerLanguage = "auto"
+
+
+class AssistantSourceResponse(BaseModel):
+    id: str
+    path: str
+    title: str
+    excerpt: str
+
+
+class AssistantAnswerResponse(BaseModel):
+    """An answer about Code Genome itself, cited to sections of its documentation."""
+
+    answer: str
+    evidence_ids: list[str]
+    limitations: list[str]
+    sources: list[AssistantSourceResponse]
+    knowledge_version: str
+
+
+class AssistantVoiceSessionCreate(BaseModel):
+    voice: Literal["Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr"] = "Kore"
+    language: AnswerLanguage = "auto"

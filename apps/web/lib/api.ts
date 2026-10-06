@@ -2,6 +2,7 @@ import type {
   AnalysisRun,
   AnswerLanguage,
   Architecture,
+  AssistantAnswer,
   AuditEventRecord,
   BugHistory,
   ChangeImpact,
@@ -292,6 +293,16 @@ export const api = {
   deleteConversation: (conversationId: string) =>
     request<void>(`/conversations/${conversationId}`, { method: "DELETE" }),
 
+  askAssistant: (question: string, language: AnswerLanguage) =>
+    request<AssistantAnswer>("/assistant/answers", {
+      method: "POST",
+      body: JSON.stringify({ question, language }),
+    }),
+  createAssistantSession: (voice: VoiceName, language: AnswerLanguage) =>
+    request<VoiceSession>("/voice/assistant-sessions", {
+      method: "POST",
+      body: JSON.stringify({ voice, language }),
+    }),
   createVoiceSession: (repositoryId: string, voice: VoiceName, language: AnswerLanguage) =>
     request<VoiceSession>("/voice/sessions", {
       method: "POST",

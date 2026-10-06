@@ -17,7 +17,7 @@ export type VoiceStatus = "idle" | "connecting" | "listening" | "speaking" | "th
 export type VoiceEvent =
   | { type: "status"; status: VoiceStatus; detail?: string }
   | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
-  | { type: "tool"; question: string; answer: GroundedAnswer | null; error?: string }
+  | { type: "tool"; question: string; answer: GroundedAnswer | null; error?: string; label?: string; text?: string }
   | { type: "session"; session: VoiceSession };
 
 const EVIDENCE_TOOL = "search_repository_evidence";
@@ -96,6 +96,14 @@ type LiveMessage = {
   goAway?: { timeLeft?: string };
 };
 
+/** A custom tool surface (the workspace assistant) instead of repository evidence search. */
+export type VoiceToolHandler = (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+export type LiveVoiceOptions = {
+  createSession?: () => Promise<VoiceSession>;
+  runTool?: VoiceToolHandler;
+};
+
 export class LiveVoiceAgent {
   private socket: WebSocket | null = null;
   private inputContext: AudioContext | null = null;
@@ -116,6 +124,7 @@ export class LiveVoiceAgent {
     private readonly voice: VoiceName,
     private readonly language: AnswerLanguage,
     private readonly emit: (event: VoiceEvent) => void,
+    private readonly options: LiveVoiceOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -140,7 +149,9 @@ export class LiveVoiceAgent {
     this.stream = stream;
     let session: VoiceSession;
     try {
-      session = await api.createVoiceSession(this.repositoryId, this.voice, this.language);
+      session = this.options.createSession
+        ? await this.options.createSession()
+        : await api.createVoiceSession(this.repositoryId, this.voice, this.language);
     } catch (caught) {
       if (this.closedByUser) {
         this.teardownAudio();
@@ -305,8 +316,16 @@ export class LiveVoiceAgent {
 
   private async runTools(calls: NonNullable<NonNullable<LiveMessage["toolCall"]>["functionCalls"]>) {
     this.emit({ type: "status", status: "thinking" });
+    const custom = this.options.runTool;
     const functionResponses = await Promise.all(
       calls.map(async (call) => {
+        if (custom) {
+          try {
+            return { id: call.id, name: call.name, response: await custom(call.name ?? "", call.args ?? {}) };
+          } catch (caught) {
+            return { id: call.id, name: call.name, response: { error: caught instanceof Error ? caught.message : "The tool failed." } };
+          }
+        }
         const question = typeof call.args?.question === "string" ? call.args.question.slice(0, 2000) : "";
         if (call.name !== EVIDENCE_TOOL || question.trim().length < 2) {
           return { id: call.id, name: call.name, response: { error: "Unsupported tool call." } };

@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # Optional read-only token for GitHub CI/deployment evidence on public repositories (the
     # anonymous API allows 60 requests an hour). Private repositories use their stored token.
     github_api_token: SecretStr | None = None
+    # Folder holding Code Genome's own Markdown docs for the workspace assistant.
+    product_docs_dir: str | None = None
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def validate_runtime(self) -> None:
