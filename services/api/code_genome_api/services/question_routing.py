@@ -56,7 +56,9 @@ _OVERVIEW_PHRASES = re.compile(
     r"what (does|do|is|are) (this|the|it|that)\b|what'?s (this|the)\b|purpose|overview|"
     r"summar|introduc|tell me about|explain (this|the)|describe (this|the)|about (this|the) "
     r"(project|repo|repository|app|codebase)|kya (karta|karti|karte|hai|kaam)|kis (liye|kaam)|"
-    r"kya hai|क्या (करता|करती|है)|किस (लिए|काम)|बारे में",
+    r"kya hai|samjha(o|iye|na|do)?\b|bata(o|iye|na|do)\b|(baare|bare|baarey) (me|mein|main)|"
+    r"\b(explain|describe|summari[sz]e|overview of)\b|"
+    r"क्या (करता|करती|है)|किस (लिए|काम)|बारे में|समझा|बताओ|बताइए",
     re.IGNORECASE,
 )
 _PROJECT_WORDS = re.compile(
@@ -627,7 +629,8 @@ _FOLLOW_UP_WORDS = {
 
 def is_follow_up(question: str) -> bool:
     """A short question that refers back ("explain that again", "aur batao", "why?")."""
-    if len(question) > 80 or _FILE_TOKEN.search(question):
+    # "ye project samjhao" names the project: an overview question, not a reference back.
+    if len(question) > 80 or _FILE_TOKEN.search(question) or _PROJECT_WORDS.search(question):
         return False
     words = [word.lower() for word in re.findall(r"[\w']+", question)]
     content = [word for word in words if word not in _FOLLOW_UP_WORDS and len(word) > 2]

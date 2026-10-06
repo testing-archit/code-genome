@@ -58,3 +58,32 @@ def test_a_follow_up_without_history_still_refuses_honestly(
     )
     answer = reply.json()["assistant_message"]["answer"]
     assert not any("previous question" in item for item in answer["limitations"])
+
+
+def test_project_overview_requests_in_hinglish_and_hindi_are_not_follow_ups() -> None:
+    from code_genome_api.services.question_routing import is_overview_question
+
+    for question in (
+        "ye project samjhao",
+        "is project ke baare mein batao",
+        "yeh app kya karta hai",
+        "explain this repo",
+        "इस प्रोजेक्ट को समझाओ",
+    ):
+        assert is_overview_question(question, "acme/widget"), question
+        assert not is_follow_up(question), question
+
+
+def test_overview_after_another_question_explains_the_project(
+    analysed: Path,  # noqa: F811
+    client: TestClient,
+) -> None:
+    conversation = client.post(
+        "/api/v1/repositories/repo_structural/conversations", headers=HEADERS, json={}
+    ).json()["id"]
+    url = f"/api/v1/conversations/{conversation}/messages"
+    client.post(url, headers=HEADERS, json={"content": "If I change src/format.ts what breaks?"})
+    overview = client.post(url, headers=HEADERS, json={"content": "ye project samjhao"})
+    answer = overview.json()["assistant_message"]["answer"]
+    assert "Fixture Pay" in answer["answer"]
+    assert not any("previous question" in item for item in answer["limitations"])
