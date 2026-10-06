@@ -153,3 +153,44 @@ def test_python_imports_and_calls_resolve_across_packages() -> None:
     assert "services/api/app/models.py#class:Invoice:1:1" in targets
     assert "services/api/app/services/billing.py#function:charge:1:1" in targets
     assert graph.analysis_version.endswith("tree-sitter-js-ts-py@0.3.0")
+
+
+def test_tsconfig_path_aliases_resolve_per_package() -> None:
+    from code_genome_genome import parse_config
+    from code_genome_genome.aliases import alias_targets
+
+    config = """{
+      // Next.js style aliases, with comments and a trailing comma
+      "compilerOptions": {
+        "baseUrl": ".",
+        "paths": { "@/*": ["./src/*"], "config": ["./src/config/index.ts"], "bad/*": ["../../../*"], },
+      },
+    }"""
+    web = parse_config("apps/web/tsconfig.json", config)
+    assert [(alias.pattern, alias.targets) for alias in web] == [
+        ("@/*", ("apps/web/src/*",)),
+        ("config", ("apps/web/src/config/index.ts",)),
+    ]
+    root = parse_config("tsconfig.json", '{"compilerOptions": {"paths": {"@/*": ["lib/*"]}}}')
+    aliases = [*web, *root]
+    assert alias_targets("apps/web/src/page.tsx", "@/lib/api", aliases) == ["apps/web/src/lib/api"]
+    assert alias_targets("tools/build.ts", "@/x", aliases) == ["lib/x"]
+    assert alias_targets("apps/web/src/page.tsx", "react", aliases) == []
+    assert parse_config("tsconfig.json", "{ not json") == []
+
+    files = [
+        analyze_source(
+            "apps/web/src/page.tsx",
+            'import { get } from "@/lib/api";\nexport const page = () => get();',
+        ),
+        analyze_source("apps/web/src/lib/api.ts", "export function get() { return 1; }"),
+    ]
+    graph = build_structural_graph("repo_alias", SNAPSHOT_SHA, files, aliases)
+    keys = {node.id: node.natural_key for node in graph.nodes}
+    imports = {
+        (keys[edge.from_node], keys[edge.to_node]) for edge in graph.edges if edge.kind == "IMPORTS"
+    }
+    assert ("apps/web/src/page.tsx", "apps/web/src/lib/api.ts") in imports
+    assert not any(key == "external:@/lib/api" for key in keys.values())
+    calls = {keys[edge.to_node] for edge in graph.edges if edge.kind == "CALLS"}
+    assert any(target.startswith("apps/web/src/lib/api.ts#function:get") for target in calls)

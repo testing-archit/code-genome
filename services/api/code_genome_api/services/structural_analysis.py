@@ -8,12 +8,19 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, date, datetime, time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from code_genome_analyzers import ANALYZER_VERSION, FileAnalysis, analyze_source
 from code_genome_evolution import EvolutionResult, analyze_evolution, mine_commit_changes
-from code_genome_genome import GRAPH_BUILDER_VERSION, GenomeGraph, build_structural_graph
+from code_genome_genome import (
+    CONFIG_NAMES,
+    GRAPH_BUILDER_VERSION,
+    GenomeGraph,
+    PathAlias,
+    build_structural_graph,
+    parse_config,
+)
 from code_genome_git import (
     GitCredential,
     GitOperationError,
@@ -572,6 +579,35 @@ def _persist_graph(
     return snapshot
 
 
+MAX_ALIAS_CONFIGS = 20
+
+
+def _path_aliases(
+    git_repository: GitRepository, source_snapshot: RepositorySourceSnapshot
+) -> list[PathAlias]:
+    """tsconfig/jsconfig ``paths`` aliases, so imports like "@/lib/x" resolve to files."""
+    configs = [
+        entry
+        for entry in source_snapshot.manifest
+        if PurePosixPath(entry.path).name in CONFIG_NAMES
+        and entry.mode != "120000"
+        and entry.size <= 200_000
+        and "node_modules" not in PurePosixPath(entry.path).parts
+    ][:MAX_ALIAS_CONFIGS]
+    if not configs:
+        return []
+    try:
+        files = git_repository.read_blobs(
+            configs, max_file_bytes=200_000, max_total_bytes=2_000_000
+        )
+    except (GitOperationError, RepositoryLimitError):
+        return []
+    aliases: list[PathAlias] = []
+    for item in files:
+        aliases.extend(parse_config(item.path, item.content.decode("utf-8", errors="replace")))
+    return aliases
+
+
 def _knowledge_files(
     git_repository: GitRepository, source_snapshot: RepositorySourceSnapshot
 ) -> list[tuple[RepositorySourceFile, ChunkKind]]:
@@ -955,7 +991,12 @@ def run_structural_analysis(
             analyze_source(source_file.path, source_file.content)
             for source_file in source_snapshot.files
         ]
-        graph = build_structural_graph(repository_id, source_snapshot.commit_sha, analyses)
+        graph = build_structural_graph(
+            repository_id,
+            source_snapshot.commit_sha,
+            analyses,
+            _path_aliases(git_repository, source_snapshot),
+        )
         edge_counts = Counter(edge.kind for edge in graph.edges)
         _set_progress(
             session_factory,

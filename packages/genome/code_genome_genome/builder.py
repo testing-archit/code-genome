@@ -1,5 +1,6 @@
 import hashlib
 import posixpath
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 
 from code_genome_analyzers import (
@@ -11,9 +12,10 @@ from code_genome_analyzers import (
     SymbolFact,
 )
 
+from .aliases import PathAlias, alias_targets
 from .types import EvidenceRef, GenomeDiagnostic, GenomeEdge, GenomeGraph, GenomeNode
 
-GRAPH_BUILDER_VERSION = "structural-genome@0.2.0"
+GRAPH_BUILDER_VERSION = "structural-genome@0.3.0"
 SOURCE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi"}
 PythonIndex = dict[str, list[str]]
 CALLABLE_KINDS = {"function", "class", "method"}
@@ -163,6 +165,7 @@ def _resolve_import(
     item: ImportFact,
     known_paths: set[str],
     index: PythonIndex | None = None,
+    aliases: Sequence[PathAlias] = (),
 ) -> str | None:
     if item.kind == "python":
         resolved = _resolve_python(source_path, item.module, known_paths, index or {})
@@ -180,6 +183,11 @@ def _resolve_import(
                         return submodule
         return resolved
     if not item.module.startswith("."):
+        # tsconfig/jsconfig path aliases ("@/lib/x" -> "src/lib/x"); otherwise a package.
+        for base in alias_targets(source_path, item.module, aliases):
+            for candidate in _import_candidates("__root__", f"./{base}"):
+                if candidate in known_paths:
+                    return candidate
         return None
     return next(
         (
@@ -226,6 +234,7 @@ def _import_bindings(
     known_paths: set[str],
     symbol_facts: dict[str, list[tuple[SymbolFact, str]]],
     index: PythonIndex | None = None,
+    aliases: Sequence[PathAlias] = (),
 ) -> tuple[dict[str, tuple[str, float]], dict[str, FileAnalysis]]:
     """Map local identifiers bound by relative ESM imports or resolved Python imports to
     exported callable symbols."""
@@ -234,7 +243,7 @@ def _import_bindings(
     for imported in analysis.imports:
         if imported.kind not in {"esm", "python"}:
             continue
-        resolved = _resolve_import(analysis.path, imported, known_paths, index)
+        resolved = _resolve_import(analysis.path, imported, known_paths, index, aliases)
         if resolved is None:
             continue
         target = by_path[resolved]
@@ -300,9 +309,12 @@ def _add_call_edges(
     edges: dict[str, GenomeEdge],
     evidence: dict[str, EvidenceRef],
     index: PythonIndex | None = None,
+    aliases: Sequence[PathAlias] = (),
 ) -> None:
     """Emit candidate CALLS edges (caller symbol or file -> callee symbol) with provenance."""
-    bindings, namespaces = _import_bindings(analysis, by_path, known_paths, symbol_facts, index)
+    bindings, namespaces = _import_bindings(
+        analysis, by_path, known_paths, symbol_facts, index, aliases
+    )
     declared = symbol_facts.get(analysis.path, [])
     local_functions = {
         symbol.name: symbol_id
@@ -339,9 +351,14 @@ def _add_call_edges(
 
 
 def build_structural_graph(
-    repository_id: str, snapshot_sha: str, files: list[FileAnalysis]
+    repository_id: str,
+    snapshot_sha: str,
+    files: list[FileAnalysis],
+    path_aliases: Sequence[PathAlias] = (),
 ) -> GenomeGraph:
-    """Build a deterministic, snapshot-scoped graph from extracted source facts."""
+    """Build a deterministic, snapshot-scoped graph from extracted source facts.
+
+    ``path_aliases`` are tsconfig/jsconfig ``paths`` entries (see ``aliases.parse_config``)."""
     if not snapshot_sha or any(
         character not in "0123456789abcdef" for character in snapshot_sha.lower()
     ):
@@ -477,7 +494,7 @@ def build_structural_graph(
                 repository_id, snapshot_sha, analysis, imported.span, "import"
             )
             evidence[imported_evidence.id] = imported_evidence
-            resolved = _resolve_import(analysis.path, imported, known_paths, py_index)
+            resolved = _resolve_import(analysis.path, imported, known_paths, py_index, path_aliases)
             if resolved:
                 target_id = file_node_ids[resolved]
             elif (
@@ -556,6 +573,7 @@ def build_structural_graph(
             edges,
             evidence,
             py_index,
+            path_aliases,
         )
 
     # The suite version covers every language analyzer, so a mixed JS/Python snapshot and a
