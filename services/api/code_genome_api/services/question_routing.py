@@ -616,6 +616,24 @@ def _flow_result(
     )
 
 
+# Words that ask to repeat, expand, or justify the previous answer rather than name a topic.
+_FOLLOW_UP_WORDS = {
+    "again", "more", "mor", "detail", "details", "elaborate", "explain", "expand", "continue",
+    "continu", "repeat", "simpler", "simply", "example", "tell", "show", "say", "give", "please",
+    "pleas", "that", "this", "it", "about", "aur", "phir", "dobara", "batao", "bataiye",
+    "samjhao", "samjhaiye", "samjha", "kaise", "kyun", "kyon", "matlab", "go", "on", "deeper",
+}  # fmt: skip
+
+
+def is_follow_up(question: str) -> bool:
+    """A short question that refers back ("explain that again", "aur batao", "why?")."""
+    if len(question) > 80 or _FILE_TOKEN.search(question):
+        return False
+    words = [word.lower() for word in re.findall(r"[\w']+", question)]
+    content = [word for word in words if word not in _FOLLOW_UP_WORDS and len(word) > 2]
+    return len(content) <= 1
+
+
 def route_question(
     db: Session,
     snapshot: RepositorySnapshot,

@@ -1,7 +1,7 @@
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from code_genome_intelligence import GroundedResult, RetrievalDocument, answer_question
 from code_genome_ml import RETRIEVAL_VERSION
@@ -26,7 +26,7 @@ from .gemini import (
     english_search_query,
     generate_grounded_answer,
 )
-from .question_routing import route_question
+from .question_routing import is_follow_up, route_question
 
 logger = logging.getLogger(__name__)
 LEXICAL_VERSION = "lexical-grounding@0.1.0"
@@ -171,13 +171,24 @@ def plan_grounded_answer(
         or ""
     )
     routed = route_question(db, snapshot, question, pool, repository_name)
+    previous_user = next((turn.text for turn in reversed(history) if turn.role == "user"), None)
+    if routed is None and previous_user and is_follow_up(question):
+        # "Explain that again" / "aur batao": reuse the previous question's evidence route.
+        earlier = route_question(db, snapshot, previous_user, pool, repository_name)
+        if earlier is not None:
+            routed = replace(
+                earlier,
+                limitations=(
+                    *earlier.limitations,
+                    "Answered from the evidence selected for your previous question.",
+                ),
+            )
     if routed is not None:
         documents = tuple(pool[item] for item in routed.evidence_ids if item in pool)
         return GroundingPlan(routed, documents, None, routed=True)
     # Follow-ups such as "and who changed it?" carry few terms, so retrieval also
     # considers the previous user question.
     retrieval_query = question
-    previous_user = next((turn.text for turn in reversed(history) if turn.role == "user"), None)
     result = _select(db, snapshot, question, pool)
     if not result.evidence_ids and previous_user:
         retrieval_query = f"{previous_user}\n{question}"
