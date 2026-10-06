@@ -95,10 +95,13 @@ def _import_candidates(source_path: str, specifier: str) -> tuple[str, ...]:
     if suffix in {".js", ".jsx"}:
         candidates.extend([base.with_suffix(".ts"), base.with_suffix(".tsx")])
     elif not suffix:
-        candidates.extend(
-            base.with_suffix(extension)
-            for extension in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
-        )
+        # "." (the repository root, e.g. require("..") from test/) has no name to suffix;
+        # only its index files can match.
+        if base.name:
+            candidates.extend(
+                base.with_suffix(extension)
+                for extension in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+            )
         candidates.extend(
             base / f"index{extension}" for extension in (".ts", ".tsx", ".js", ".jsx")
         )

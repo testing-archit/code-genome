@@ -70,6 +70,18 @@ def test_resolves_safe_parent_imports_and_tracks_non_code_assets() -> None:
     assert len([edge for edge in graph.edges if edge.kind == "IMPORTS"]) == 2
 
 
+def test_import_of_the_repository_root_resolves_to_its_index() -> None:
+    # Express tests do `require("..")`, which normalises to "."; this used to crash the build.
+    files = [
+        analyze_source("test/app.js", 'const express = require("..");\nexpress();'),
+        analyze_source("index.js", "module.exports = function express() {};"),
+    ]
+    graph = build_structural_graph("repo_fixture", SNAPSHOT_SHA, files)
+
+    assert not graph.diagnostics
+    assert len([edge for edge in graph.edges if edge.kind == "IMPORTS"]) == 1
+
+
 def test_file_nodes_carry_code_metrics() -> None:
     analysis = analyze_source(
         "src/metrics.ts",

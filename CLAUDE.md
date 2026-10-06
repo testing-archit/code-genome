@@ -56,7 +56,7 @@ Dev identity headers: `X-Workspace-ID: ws_demo`, `X-User-ID: usr_demo`.
 ```bash
 uv run ruff format services infra packages && uv run ruff check services infra packages
 uv run mypy services packages            # CI runs this; it must be clean
-uv run pytest -p no:warnings             # 208 tests at last update
+uv run pytest -p no:warnings             # 228 tests at last update
 npm run typecheck && npm run lint && npm test
 npm run test:e2e --workspace @code-genome/web   # Playwright, mocked API
 CODE_GENOME_TEST_DATABASE_URL=postgresql+psycopg://user@localhost/db uv run pytest services/api/tests  # Postgres
@@ -156,10 +156,12 @@ progressively), `GEMINI_LIVE_MODEL` (gemini-3.8-live; flash models cannot use th
 
 ## Status (2026-10-06)
 
-Branch `feat/ml-models-voice-agent-ui`, pushed and in sync with `origin`. 208 Python tests,
-5 web unit tests, Playwright e2e, typecheck, lint, and CI all pass. Three live repositories
-are analysed with the current analyzer: sindresorhus/ky, testing-archit/ecocred,
-testing-archit/code-genome. Every item in the product document's gap audit is implemented.
+Branch `feat/ml-models-voice-agent-ui`, pushed and in sync with `origin`. 228 Python tests,
+5 web unit tests, Playwright e2e, typecheck, lint, and CI all pass. Seven live repositories
+are registered in `ws_demo`: sindresorhus/ky, testing-archit/ecocred,
+testing-archit/code-genome, plus (added 2026-10-06 for testing, analysed with the current
+analyzer) expressjs/express (`master`), pallets/flask, psf/requests, axios/axios (`v1.x`).
+Every item in the product document's gap audit is implemented.
 
 ## Remaining work
 
@@ -169,12 +171,14 @@ testing-archit/code-genome. Every item in the product document's gap audit is im
    commit it, move it, or ignore it (ask the user).
 4. Re-analyse the three live repositories so their snapshots include Python analysis
    (`tree-sitter-js-ts-py@0.3.0`); this matters most for code-genome, which is mostly Python.
-5. Evaluation on real repositories is small (three live repos, six in the cross-project
+5. Evaluation on real repositories is small (seven live repos, six in the cross-project
    benchmark); impact P@K results on synthetic fixtures are near-tied and should not be read as
    real-world performance.
 
 ## Changelog
 
+- 2026-10-06: Added express, flask, requests, and axios as live test repositories. Fixed an
+  analysis crash when a JS file imports the repository root (`require("..")` from `test/`).
 - 2026-10-06: CLAUDE.md created with project state, conventions, and this update rule.
   Removed five leftover empty agent worktrees/branches.
 - 2026-10-06 (earlier): Python analysis; cross-project benchmark and TreeSHAP; CI on Postgres
